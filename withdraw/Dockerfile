@@ -1,0 +1,30 @@
+# ---- Build Stage ----
+FROM maven:3.9.6-eclipse-temurin-21 AS build
+WORKDIR /app
+
+COPY pom.xml .
+COPY common/pom.xml common/
+COPY proto/ proto/
+COPY apigateway/pom.xml apigateway/
+COPY auth/pom.xml auth/
+COPY card/pom.xml card/
+COPY email/pom.xml email/
+COPY merchant/pom.xml merchant/
+COPY role/pom.xml role/
+COPY saldo/pom.xml saldo/
+COPY topup/pom.xml topup/
+COPY transaction/pom.xml transaction/
+COPY transfer/pom.xml transfer/
+COPY user/pom.xml user/
+COPY withdraw/pom.xml withdraw/
+COPY common/src common/src
+COPY withdraw/src withdraw/src
+
+RUN mvn clean package -pl withdraw -am -DskipTests -q
+
+# ---- Runtime Stage ----
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+COPY --from=build /app/withdraw/target/withdraw-*-fat.jar app.jar
+EXPOSE 50060
+ENTRYPOINT ["java", "-jar", "app.jar"]

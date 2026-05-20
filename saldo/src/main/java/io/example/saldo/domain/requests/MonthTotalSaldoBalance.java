@@ -1,0 +1,15 @@
+package io.example.saldo.domain.requests;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class MonthTotalSaldoBalance {
+  private int year;
+  private int month;
+}

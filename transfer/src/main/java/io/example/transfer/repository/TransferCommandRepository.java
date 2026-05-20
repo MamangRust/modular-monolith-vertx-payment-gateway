@@ -1,0 +1,24 @@
+package io.example.transfer.repository;
+
+import io.example.transfer.model.Transfer;
+import io.vertx.core.Future;
+
+public interface TransferCommandRepository {
+  Future<Transfer> createTransfer(String from, String to, long amount);
+
+  Future<Transfer> updateTransfer(int id, String from, String to, long amount);
+
+  Future<Transfer> updateTransferAmount(int id, long amount);
+
+  Future<Transfer> updateTransferStatus(int id, String status);
+
+  Future<Transfer> trashTransfer(int id);
+
+  Future<Transfer> restoreTransfer(int id);
+
+  Future<Void> deleteTransferPermanently(int id);
+
+  Future<Void> restoreAllTransfers();
+
+  Future<Void> deleteAllPermanentTransfers();
+}

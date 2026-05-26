@@ -8,6 +8,7 @@ import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.example.saldo.domain.requests.CreateSaldoRequest;
 import io.example.saldo.handler.SaldoCommandHandler;
 import io.example.saldo.handler.SaldoQueryHandler;
 import io.example.saldo.handler.SaldoStatsBalanceHandler;
@@ -38,17 +39,22 @@ import io.vertx.core.Vertx;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.grpc.server.GrpcServer;
+import io.vertx.kafka.client.consumer.KafkaConsumer;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.redis.client.RedisAPI;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 import pb.card.VertxCardQueryServiceGrpcClient;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class SaldoVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(SaldoVerticle.class);
 
   private TelemetryConfig telemetryConfig;
   private io.vertx.grpc.client.GrpcClient cardGrpcClient;
+  private KafkaConsumer<String, JsonObject> kafkaConsumer;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
@@ -129,8 +135,10 @@ public class SaldoVerticle extends AbstractVerticle {
     SaldoQueryService queryService = new SaldoQueryServiceImpl(queryRepo, statsTotalRepo, statsBalRepo, redisService,
         tracingMetrics);
     SaldoCommandService cmdService = new SaldoCommandServiceImpl(cmdRepo, cardClientRepo, redisService, tracingMetrics);
-    SaldoStatsBalanceService statsBalService = new SaldoStatsBalanceServiceImpl(statsBalRepo, redisService, tracingMetrics);
-    SaldoStatsTotalService statsTotalService = new SaldoStatsTotalServiceImpl(statsTotalRepo, redisService, tracingMetrics);
+    SaldoStatsBalanceService statsBalService = new SaldoStatsBalanceServiceImpl(statsBalRepo, redisService,
+        tracingMetrics);
+    SaldoStatsTotalService statsTotalService = new SaldoStatsTotalServiceImpl(statsTotalRepo, redisService,
+        tracingMetrics);
 
     // 6. Initialize Handlers
     var queryHandler = new SaldoQueryHandler(queryService);
@@ -141,14 +149,68 @@ public class SaldoVerticle extends AbstractVerticle {
     int port = cfg.getGrpcPort();
 
     startGrpcServer(queryHandler, cmdHandler, statsBalHandler, statsTotalHandler, port)
-        .onSuccess(v -> {
+        .compose(v -> {
           log.info("SaldoVerticle fully initialized with Decoupled CQRS and gRPC Client. Listening for gRPC on port {}",
               port);
-          startPromise.complete();
-        })
-        .onFailure(err -> {
-          log.error("Failed to bind Saldo gRPC server", err);
 
+          Map<String, String> kafkaConfig = new HashMap<>();
+          kafkaConfig.put("bootstrap.servers", System.getenv().getOrDefault("KAFKA_BROKERS", "localhost:9092"));
+          kafkaConfig.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+          kafkaConfig.put("value.deserializer", "io.vertx.kafka.client.serialization.JsonObjectDeserializer");
+          kafkaConfig.put("group.id", "saldo-service-group");
+          kafkaConfig.put("auto.offset.reset", "earliest");
+
+          this.kafkaConsumer = KafkaConsumer.create(vertx, kafkaConfig);
+
+          this.kafkaConsumer.handler(record -> {
+            JsonObject payload = record.value();
+            log.info("📥 Received Kafka message on topic {}: {}", record.topic(), payload.encode());
+
+            try {
+              String cardNumber = payload.getString("card_number");
+              Long totalBalance = 0L;
+              if (payload.containsKey("total_balance")) {
+                Number balNum = payload.getNumber("total_balance");
+                if (balNum != null) {
+                  totalBalance = balNum.longValue();
+                }
+              }
+
+              if (cardNumber == null) {
+                log.warn("⚠️ Received incomplete saldo payload: {}", payload.encode());
+                return;
+              }
+
+              CreateSaldoRequest createReq = CreateSaldoRequest.builder()
+                  .cardNumber(cardNumber)
+                  .totalBalance(totalBalance)
+                  .build();
+
+              cmdService.createSaldo(createReq)
+                  .onSuccess(apiResponse -> {
+                    if ("success".equals(apiResponse.status())) {
+                      log.info("✅ Successfully handled create saldo from Kafka for card: {}", cardNumber);
+                    } else {
+                      log.error("❌ Failed to handle create saldo from Kafka for card: {} | Message: {}", cardNumber,
+                          apiResponse.message());
+                    }
+                  })
+                  .onFailure(
+                      err -> log.error("❌ Exception handling create saldo from Kafka for card: {}", cardNumber, err));
+
+            } catch (Exception e) {
+              log.error("❌ Error parsing/processing Kafka message from topic {}", record.topic(), e);
+            }
+          });
+
+          return this.kafkaConsumer.subscribe("saldo-service-topic-create-saldo")
+              .onSuccess(
+                  x -> log.info("📡 Saldo Service successfully subscribed to topic: saldo-service-topic-create-saldo"))
+              .mapEmpty();
+        })
+        .onSuccess(v -> startPromise.complete())
+        .onFailure(err -> {
+          log.error("❌ Failed to start SaldoVerticle", err);
           startPromise.fail(err);
         });
   }
@@ -160,6 +222,9 @@ public class SaldoVerticle extends AbstractVerticle {
     }
     if (cardGrpcClient != null) {
       cardGrpcClient.close();
+    }
+    if (kafkaConsumer != null) {
+      kafkaConsumer.close();
     }
     stopPromise.complete();
   }

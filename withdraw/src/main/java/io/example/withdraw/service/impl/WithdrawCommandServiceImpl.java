@@ -115,11 +115,13 @@ public class WithdrawCommandServiceImpl implements WithdrawCommandService {
                                           WithdrawResponse.from(updated));
                                     })
                                     .recover(err -> {
-                                      logger.error("Failed to send withdraw email via Kafka for withdrawId: {}", updated.getId(), err);
+                                      logger.error("Failed to send withdraw email via Kafka for withdrawId: {}",
+                                          updated.getId(), err);
                                       tracingMetrics.completeSpanSuccess(tracingContext, "create",
                                           "Withdrawal created successfully (email failed)");
-                                      return Future.succeededFuture(ApiResponse.success("Withdrawal created successfully",
-                                          WithdrawResponse.from(updated)));
+                                      return Future
+                                          .succeededFuture(ApiResponse.success("Withdrawal created successfully",
+                                              WithdrawResponse.from(updated)));
                                     });
                               });
                         });
@@ -168,7 +170,8 @@ public class WithdrawCommandServiceImpl implements WithdrawCommandService {
                 return repoSaldo.updateSaldoBalance(req.getCardNumber(), newBalance)
                     .compose(v -> repo.updateWithdraw(req.getWithdrawId(), req.getCardNumber(), req.getWithdrawAmount())
                         .compose(updated -> repo.updateWithdrawStatus(updated.getId(), "success"))
-                        .compose(updated -> redisService.delete(CACHE_PREFIX + req.getWithdrawId()).map(ignored -> updated))
+                        .compose(
+                            updated -> redisService.delete(CACHE_PREFIX + req.getWithdrawId()).map(ignored -> updated))
                         .compose(updated -> redisService.delete(CACHE_PREFIX + "list:*").map(ignored -> updated))
                         .compose(updated -> repoCard.findUserCardByCardNumber(req.getCardNumber())
                             .compose(cardResp -> {
@@ -190,13 +193,18 @@ public class WithdrawCommandServiceImpl implements WithdrawCommandService {
                                   String.valueOf(updated.getId()), emailPayload);
                             })
                             .map(v2 -> {
-                              tracingMetrics.completeSpanSuccess(tracingContext, "update", "Withdrawal updated successfully");
-                              return ApiResponse.success("Withdrawal updated successfully", WithdrawResponse.from(updated));
+                              tracingMetrics.completeSpanSuccess(tracingContext, "update",
+                                  "Withdrawal updated successfully");
+                              return ApiResponse.success("Withdrawal updated successfully",
+                                  WithdrawResponse.from(updated));
                             })
                             .recover(err -> {
-                              logger.error("Failed to send withdraw update email via Kafka for withdrawId: {}", updated.getId(), err);
-                              tracingMetrics.completeSpanSuccess(tracingContext, "update", "Withdrawal updated successfully (email failed)");
-                              return Future.succeededFuture(ApiResponse.success("Withdrawal updated successfully", WithdrawResponse.from(updated)));
+                              logger.error("Failed to send withdraw update email via Kafka for withdrawId: {}",
+                                  updated.getId(), err);
+                              tracingMetrics.completeSpanSuccess(tracingContext, "update",
+                                  "Withdrawal updated successfully (email failed)");
+                              return Future.succeededFuture(ApiResponse.success("Withdrawal updated successfully",
+                                  WithdrawResponse.from(updated)));
                             })))
                     .recover(err -> repoSaldo.updateSaldoBalance(req.getCardNumber(), currentBalance)
                         .compose(rv -> Future.failedFuture(err)));

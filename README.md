@@ -1,10 +1,10 @@
-# Distributed Modular Monolith — Payment Gateway Platform (Java Vert.x)
+# Distributed Modular Monolith — Payment Gateway Platform (Eclipse Vert.x)
 
-A production-grade, highly resilient, and fully observable **modular-monolith payment gateway backend** built in **Java 21** using **Eclipse Vert.x** reactive framework. Designed around domain-driven service boundaries following Clean Architecture and CQRS principles, it retains the operational and deployment simplicity of a single deployment unit while maintaining logical isolation typical of microservices.
+A production-grade, highly resilient, and fully observable **modular-monolith payment gateway backend** built in **Java 21** using **Eclipse Vert.x** reactive toolkit (v4.5.24). Designed around domain-driven service boundaries following Clean Architecture and CQRS principles, it retains the operational and deployment simplicity of a single deployment unit while maintaining logical isolation typical of microservices.
 
-Each financial and identity business domain — Users, Roles, Cards, Merchants, Saldo, Topups, Transactions, Transfers, Withdrawals — lives in its own self-contained Maven module. These modules communicate synchronously via high-performance **gRPC** protocols and asynchronously using **Apache Kafka** event propagation, exposing a unified reactive entry point through a **REST API Gateway** powered by Eclipse Vert.x HTTP Router.
+Each financial and identity business domain — Users, Roles, Cards, Merchants, Saldo, Topups, Transactions, Transfers, Withdrawals — lives in its own self-contained Maven module. These modules communicate synchronously via high-performance **gRPC** protocols and asynchronously using **Apache Kafka** event propagation, exposing a unified reactive entry point through a **REST API Gateway** powered by Vert.x Web Router.
 
-The platform is fortified with a **comprehensive observability suite** (Prometheus, Grafana, Loki, Jaeger, OpenTelemetry, Pyroscope), robust connection pooling via **PgBouncer**, **distributed Redis Cluster caching** with custom telemetry for each service, and Kubernetes configurations ready for production auto-scaling.
+The platform is fortified with a **comprehensive observability suite** (Prometheus, Grafana, Loki, Jaeger, OpenTelemetry), robust connection pooling via **PgBouncer**, **distributed Redis Cluster caching** with custom telemetry for each service, and Kubernetes configurations ready for production auto-scaling.
 
 ---
 
@@ -22,7 +22,7 @@ The platform is fortified with a **comprehensive observability suite** (Promethe
 | **Transfer** | Safe peer-to-peer card-to-card or user-to-user funds settlement with balance debit/credit synchronization and event-driven logging. |
 | **Withdraw** | Funds settlement from user cards to external accounts/banks, daily transaction threshold limits, and status processing pipelines. |
 | **Email Worker** | Kafka-driven asynchronous worker dispatching critical notification emails (OTPs, login alerts, merchant onboarding notices, and transfer/topup invoices) via SMTP. |
-| **Observability** | Multi-dimensional metrics (Prometheus + Grafana), log aggregation (Loki + Logback), end-to-end distributed tracing (Jaeger + OpenTelemetry), continuous CPU/Memory profiling (Pyroscope), and resource monitors (Node, Kafka, Postgres Exporters). |
+| **Observability** | Multi-dimensional metrics (Prometheus + Grafana), log aggregation (Loki + Logback), end-to-end distributed tracing (Jaeger + OpenTelemetry), and resource monitors (Node, Kafka, Postgres Exporters). |
 | **Deployment** | Local orchestration using Docker Compose (featuring a 6-node Redis Cluster and PgBouncer), and auto-scaling Kubernetes manifests configured with Horizontal Pod Autoscalers (HPA). |
 
 ---
@@ -35,7 +35,7 @@ The platform implements a **Distributed Modular Monolith** architecture. Each bu
 
 - **Domain-Driven Boundary Isolation**: Every service owns its database access, caching layers, and service logic, strictly forbidding cross-boundary database sharing.
 - **Clean Architecture & CQRS**: Separation of concerns using `Handler (gRPC) → Service (Command/Query) → Repository (Command/Query)` layers ensures business logic remains clean, performant, and framework-agnostic.
-- **Reactive execution**: Powered entirely by the non-blocking Eclipse Vert.x event loop, enabling high throughput with minimal resource footprints.
+- **Reactive Execution**: Powered entirely by the Vert.x event-loop execution model, utilizing non-blocking asynchronous APIs with `io.vertx.core.Future` for extreme throughput with minimal memory footprint.
 - **PgBouncer Pooling**: Employs connection pooling to avoid PostgreSQL socket exhaustion across the multiple concurrent modular services.
 - **Event-Driven Resilience**: Apache Kafka decouples transaction events, ensuring side effects like email billing remain completely non-blocking.
 - **OTel Telemetry Integration**: Standardized OpenTelemetry middleware injects trace IDs across gRPC boundaries, allowing seamless trace propagation from the client REST gateway down to postgres operations.
@@ -53,81 +53,139 @@ graph TB
 
     subgraph APIGateway["API Gateway — NGINX + Vert.x REST Gateway"]
         direction LR
-        REST["REST API Route Handler<br/>Port :5000"]
-        AuthMW["JWT Auth & Role<br/>Middleware"]
+        REST["REST API Route Handler<br/>Port :5000"]:::gateway
+        AuthMW["JWT Auth & Role<br/>Middleware"]:::gateway
     end
-    class APIGateway gateway
 
     Client -->|HTTP REST| APIGateway
 
-    subgraph BusinessServices["Business Domain Services (Java Vert.x)"]
+    subgraph BusinessServices["Business Domain Services (Eclipse Vert.x)"]
         direction TB
 
         subgraph IdentityDomain["Identity & Access"]
-            AUTH["Auth Service<br/>JWT & BCrypt Server"]
-            USER["User Service<br/>Profile Management"]
-            ROLE["Role Service<br/>RBAC & Permissions"]
+            AUTH["Auth Service<br/>JWT & BCrypt Server"]:::domain
+            USER["User Service<br/>Profile Management"]:::domain
+            ROLE["Role Service<br/>RBAC & Permissions"]:::domain
         end
 
         subgraph MerchantDomain["Merchant Management"]
-            MERCH["Merchant Service<br/>Onboarding & Profiling"]
+            MERCH["Merchant Service<br/>Onboarding & Profiling"]:::domain
         end
 
         subgraph FinanceDomain["Finance & Ledger Suite"]
-            CARD["Card Service<br/>VCC & Card Analytics"]
-            SALDO["Saldo Service<br/>Real-time Balance Tracker"]
+            CARD["Card Service<br/>VCC & Card Analytics"]:::domain
+            SALDO["Saldo Service<br/>Real-time Balance Tracker"]:::domain
         end
 
         subgraph TransactionDomain["Transfers & Transactions"]
-            TOPUP["Topup Service<br/>Balance Funding Engine"]
-            TXN["Transaction Service<br/>Central Audit Register"]
-            TRANSFER["Transfer Service<br/>P2P Card-to-Card Transfer"]
-            WITHDRAW["Withdraw Service<br/>Outbound Fund Settlement"]
+            TOPUP["Topup Service<br/>Balance Funding Engine"]:::domain
+            TXN["Transaction Service<br/>Central Audit Register"]:::domain
+            TRANSFER["Transfer Service<br/>P2P Card-to-Card Transfer"]:::domain
+            WITHDRAW["Withdraw Service<br/>Outbound Fund Settlement"]:::domain
         end
     end
-    class BusinessServices domain
 
-    APIGateway -->|"Vert.x gRPC Client"| BusinessServices
+    REST -->|"Vert.x gRPC Client"| AUTH
+    REST -->|"Vert.x gRPC Client"| USER
+    REST -->|"Vert.x gRPC Client"| ROLE
+    REST -->|"Vert.x gRPC Client"| MERCH
+    REST -->|"Vert.x gRPC Client"| CARD
+    REST -->|"Vert.x gRPC Client"| SALDO
+    REST -->|"Vert.x gRPC Client"| TOPUP
+    REST -->|"Vert.x gRPC Client"| TXN
+    REST -->|"Vert.x gRPC Client"| TRANSFER
+    REST -->|"Vert.x gRPC Client"| WITHDRAW
 
     subgraph Infrastructure["Infrastructure Layer"]
         direction LR
-        PGBOUNCER["PgBouncer<br/>Connection Pooler :6432"]
-        PG[("PostgreSQL<br/>PAYMENT_GATEWAY DB")]
-        REDIS[("Redis Cluster<br/>6-Node Distributed Cache")]
-        KAFKA[("Kafka Broker<br/>Event Bus")]
-        PYRO["Pyroscope<br/>Continuous Profiler"]
+        PGBOUNCER["PgBouncer<br/>Connection Pooler :6432"]:::infra
+        PG[("PostgreSQL<br/>PAYMENT_GATEWAY DB")]:::infra
+        REDIS[("Redis Cluster<br/>6-Node Distributed Cache")]:::infra
+        KAFKA[("Kafka Broker<br/>Event Bus")]:::infra
     end
-    class Infrastructure infra
 
-    BusinessServices -->|"Reactive SQL Client"| PGBOUNCER
+    AUTH -->|"Reactive SQL Client"| PGBOUNCER
+    USER -->|"Reactive SQL Client"| PGBOUNCER
+    ROLE -->|"Reactive SQL Client"| PGBOUNCER
+    MERCH -->|"Reactive SQL Client"| PGBOUNCER
+    CARD -->|"Reactive SQL Client"| PGBOUNCER
+    SALDO -->|"Reactive SQL Client"| PGBOUNCER
+    TOPUP -->|"Reactive SQL Client"| PGBOUNCER
+    TXN -->|"Reactive SQL Client"| PGBOUNCER
+    TRANSFER -->|"Reactive SQL Client"| PGBOUNCER
+    WITHDRAW -->|"Reactive SQL Client"| PGBOUNCER
+
     PGBOUNCER --> PG
-    BusinessServices -->|"Vert.x Redis API"| REDIS
-    BusinessServices -->|"Publish Events"| KAFKA
-    BusinessServices -.->|"Profile Data"| PYRO
+
+    AUTH -->|"Vert.x Redis Client"| REDIS
+    USER -->|"Vert.x Redis Client"| REDIS
+    ROLE -->|"Vert.x Redis Client"| REDIS
+    MERCH -->|"Vert.x Redis Client"| REDIS
+    CARD -->|"Vert.x Redis Client"| REDIS
+    SALDO -->|"Vert.x Redis Client"| REDIS
+    REST -->|"Vert.x Redis Client"| REDIS
 
     subgraph EventConsumers["Event-Driven Consumers"]
-        EMAIL["Email Service<br/>SMTP Notification Worker"]
+        EMAIL["Email Service<br/>SMTP Notification Worker"]:::event
     end
-    class EventConsumers event
 
     KAFKA -->|"Consume Events"| EMAIL
 
     subgraph Observability["Observability Stack"]
         direction LR
-        PROM["Prometheus<br/>Metrics Engine"]
-        LOKI["Loki<br/>Log Aggregator"]
-        JAEGER["Jaeger<br/>Distributed Traces"]
-        GRAFANA["Grafana<br/>Unified Dashboards"]
-        OTEL["OTel Collector<br/>Telemetry Pipeline"]
-        PROMTAIL["Promtail<br/>Log Shipper"]
-        NODEX["Node Exporter<br/>System Metrics"]
-        KAFKAX["Kafka Exporter<br/>Broker Metrics"]
-        PGX["Postgres Exporter<br/>DB Performance"]
+        PROM["Prometheus<br/>Metrics Engine"]:::obs
+        LOKI["Loki<br/>Log Aggregator"]:::obs
+        JAEGER["Jaeger<br/>Distributed Traces"]:::obs
+        GRAFANA["Grafana<br/>Unified Dashboards"]:::obs
+        OTEL["OTel Collector<br/>Telemetry Pipeline"]:::obs
+        PROMTAIL["Promtail<br/>Log Shipper"]:::obs
+        NODEX["Node Exporter<br/>System Metrics"]:::obs
+        KAFKAX["Kafka Exporter<br/>Broker Metrics"]:::obs
+        PGX["Postgres Exporter<br/>DB Performance"]:::obs
     end
-    class Observability obs
 
-    BusinessServices -.->|"/metrics"| PROM
-    BusinessServices -.->|"OTLP Spans"| OTEL
+    AUTH -->|gRPC| USER
+    AUTH -->|gRPC| ROLE
+    MERCH -->|gRPC| USER
+    CARD -->|gRPC| USER
+    TOPUP -->|gRPC| SALDO
+    TOPUP -->|gRPC| TXN
+    TRANSFER -->|gRPC| CARD
+    TRANSFER -->|gRPC| SALDO
+    TRANSFER -->|gRPC| TXN
+    WITHDRAW -->|gRPC| CARD
+    WITHDRAW -->|gRPC| SALDO
+    WITHDRAW -->|gRPC| TXN
+
+    AUTH -.->|"Publish Verification Event"| KAFKA
+    TOPUP -.->|"Publish Topup Event"| KAFKA
+    TRANSFER -.->|"Publish Transfer Event"| KAFKA
+    WITHDRAW -.->|"Publish Withdraw Event"| KAFKA
+
+    AUTH -.->|"/metrics"| PROM
+    USER -.->|"/metrics"| PROM
+    ROLE -.->|"/metrics"| PROM
+    MERCH -.->|"/metrics"| PROM
+    CARD -.->|"/metrics"| PROM
+    SALDO -.->|"/metrics"| PROM
+    TOPUP -.->|"/metrics"| PROM
+    TXN -.->|"/metrics"| PROM
+    TRANSFER -.->|"/metrics"| PROM
+    WITHDRAW -.->|"/metrics"| PROM
+    REST -.->|"/metrics"| PROM
+
+    AUTH -.->|"OTLP Spans"| OTEL
+    USER -.->|"OTLP Spans"| OTEL
+    ROLE -.->|"OTLP Spans"| OTEL
+    MERCH -.->|"OTLP Spans"| OTEL
+    CARD -.->|"OTLP Spans"| OTEL
+    SALDO -.->|"OTLP Spans"| OTEL
+    TOPUP -.->|"OTLP Spans"| OTEL
+    TXN -.->|"OTLP Spans"| OTEL
+    TRANSFER -.->|"OTLP Spans"| OTEL
+    WITHDRAW -.->|"OTLP Spans"| OTEL
+    REST -.->|"OTLP Spans"| OTEL
+
     OTEL -.-> JAEGER
     PROMTAIL -.-> LOKI
     NODEX -.-> PROM
@@ -136,6 +194,8 @@ graph TB
     PROM -.-> GRAFANA
     LOKI -.-> GRAFANA
     JAEGER -.-> GRAFANA
+    KAFKA -.-> KAFKAX
+    PG -.-> PGX
 ```
 
 ---
@@ -204,19 +264,14 @@ graph TB
     subgraph Service["Maven Module: <service-name>/"]
         direction TB
 
-        VERTICLE["<ServiceName>Verticle.java<br/>Bootstrap & Lifecycle"]
-
         subgraph SrcJava["src/main/java/io/example/<service>/"]
             direction TB
             HANDLER["handler/<br/>gRPC Service Handlers"]:::handler
             SVC["service/ & service.impl/<br/>CQRS Business Logic"]:::service
-            REPO["repository/ & repository.impl/<br/>Reactive SQL Queries"]:::repo
-            MODEL["model/<br/>Entities & Mappings"]:::repo
+            REPO["repository/<br/>Reactive Repositories"]:::repo
+            MODEL["entity/ / domain/<br/>Entities & Domain Models"]:::repo
         end
 
-        VERTICLE --> HANDLER
-        VERTICLE --> SVC
-        VERTICLE --> REPO
         HANDLER --> SVC
         SVC --> REPO
         REPO --> MODEL
@@ -244,7 +299,6 @@ graph TB
     SVC --> OBS
     REPO --> PGDB
     REDIS_SVC --> RCLUSTER
-    VERTICLE --> FLYWAY
 ```
 
 ---
@@ -367,7 +421,6 @@ graph TB
 | **Metrics** | Prometheus + Grafana | Core metrics tracking (CPU, memory, request error rates, gRPC latencies, DB connection states). |
 | **Logging** | Loki + Logback | Centralized structured JSON logger for indexing logs by service, queryable via LogQL. |
 | **Tracing** | OpenTelemetry + Jaeger | Distributed system tracing across API gateway and internal gRPC services. |
-| **Profiling** | Pyroscope | Continuous memory/CPU profiling to eliminate allocation memory leaks in transaction loops. |
 | **Alerting** | Alertmanager | Automated notification system triggered during latency hikes or service disconnects. |
 
 ---
@@ -379,7 +432,7 @@ graph TB
 The Docker Compose configuration provisions a 6-node Redis Cluster along with databases, event brokers, and reactive service containers to replicate a microservices environment.
 
 ```mermaid
-flowchart TD
+flowchart TB
     classDef gateway fill:#1e293b,stroke:#22d3ee,color:#cffafe,stroke-width:2px,font-weight:bold
     classDef core fill:#1e1b4b,stroke:#a78bfa,color:#ede9fe,stroke-width:1.5px
     classDef infra fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1.5px
@@ -389,81 +442,417 @@ flowchart TD
     subgraph DockerCompose["docker-compose.yml — Local Environment"]
 
         subgraph Gateway["API Gateway"]
-            NGINX["NGINX Proxy :80"]
-            APIGW["API Gateway Container<br/>Vert.x REST Gateway :5000"]
+            NGINX["NGINX Proxy :80"]:::gateway
+            APIGW["API Gateway Container<br/>Vert.x REST Gateway :5000"]:::gateway
         end
-        class Gateway gateway
 
         subgraph Services["Core Service Containers"]
             subgraph Identity["Identity & Access"]
-                AUTH["auth-service"]
-                USER["user-service"]
-                ROLE["role-service"]
+                AUTH["auth-service"]:::core
+                USER["user-service"]:::core
+                ROLE["role-service"]:::core
             end
 
             subgraph MerchantSuite["Merchant Domain"]
-                MERCH["merchant-service"]
+                MERCH["merchant-service"]:::core
             end
 
             subgraph FinanceSuite["Finance & Card"]
-                CARD["card-service"]
-                SALDO["saldo-service"]
+                CARD["card-service"]:::core
+                SALDO["saldo-service"]:::core
             end
 
             subgraph MovementsSuite["Fund Movements"]
-                TOPUP["topup-service"]
-                TXN["transaction-service"]
-                TRANSFER["transfer-service"]
-                WITHDRAW["withdraw-service"]
+                TOPUP["topup-service"]:::core
+                TXN["transaction-service"]:::core
+                TRANSFER["transfer-service"]:::core
+                WITHDRAW["withdraw-service"]:::core
             end
         end
-        class Services core
 
         subgraph Infra["Infrastructure Suite"]
-            PG[("PostgreSQL :5432")]
-            PGB[("PgBouncer :6432")]
-            REDIS_CLUSTER[("Redis Cluster :6379-6384<br/>6 Nodes Enabled")]
-            KAFKA[("Kafka Broker :9092")]
-            PYRO[("Pyroscope :4040")]
+            PG[("PostgreSQL :5432")]:::infra
+            PGB[("PgBouncer :6432")]:::infra
+            REDIS_CLUSTER[("Redis Cluster :6379-6384<br/>6 Nodes Enabled")]:::infra
+            KAFKA[("Kafka Broker :9092")]:::infra
         end
-        class Infra infra
 
         subgraph Obs["Observability Stack"]
-            PROM["Prometheus :9090"]
-            GRAFANA["Grafana :3000"]
-            LOKI["Loki :3100"]
-            JAEGER["Jaeger :16686"]
-            OTEL["OTel Collector :4317"]
-            NODEX["Node Exporter"]
-            KAFKAX["Kafka Exporter"]
-            PGX["Postgres Exporter"]
-            PROMTAIL["Promtail Log Shipper"]
+            PROM["Prometheus :9090"]:::obs
+            GRAFANA["Grafana :3000"]:::obs
+            LOKI["Loki :3100"]:::obs
+            JAEGER["Jaeger :16686"]:::obs
+            OTEL["OTel Collector :4317"]:::obs
+            NODEX["Node Exporter"]:::obs
+            KAFKAX["Kafka Exporter"]:::obs
+            PGX["Postgres Exporter"]:::obs
+            PROMTAIL["Promtail Log Shipper"]:::obs
         end
-        class Obs obs
 
         subgraph Events["Event Consumers"]
-            EMAIL["Email Worker"]
+            EMAIL["Email Worker"]:::event
         end
-        class Events event
     end
 
     NGINX --> APIGW
-    APIGW -->|"gRPC"| Services
-    Services -->|"gRPC/SQL"| PGB
-    PGB --> PG
-    Services --> KAFKA
-    KAFKA --> EMAIL
+    
+    APIGW -->|gRPC| AUTH
+    APIGW -->|gRPC| USER
+    APIGW -->|gRPC| ROLE
+    APIGW -->|gRPC| MERCH
+    APIGW -->|gRPC| CARD
+    APIGW -->|gRPC| SALDO
+    APIGW -->|gRPC| TOPUP
+    APIGW -->|gRPC| TXN
+    APIGW -->|gRPC| TRANSFER
+    APIGW -->|gRPC| WITHDRAW
 
-    Services --> REDIS_CLUSTER
+    AUTH -->|SQL| PGB
+    USER -->|SQL| PGB
+    ROLE -->|SQL| PGB
+    MERCH -->|SQL| PGB
+    CARD -->|SQL| PGB
+    SALDO -->|SQL| PGB
+    TOPUP -->|SQL| PGB
+    TXN -->|SQL| PGB
+    TRANSFER -->|SQL| PGB
+    WITHDRAW -->|SQL| PGB
+
+    PGB --> PG
+
+    AUTH -->|Cache| REDIS_CLUSTER
+    USER -->|Cache| REDIS_CLUSTER
+    ROLE -->|Cache| REDIS_CLUSTER
+    MERCH -->|Cache| REDIS_CLUSTER
+    CARD -->|Cache| REDIS_CLUSTER
+    SALDO -->|Cache| REDIS_CLUSTER
     APIGW --> REDIS_CLUSTER
 
-    Services -.->|"Metrics"| PROM
-    Services -.->|"Traces"| OTEL
-    Services -.->|"Profiles"| PYRO
+    AUTH -->|gRPC| USER
+    AUTH -->|gRPC| ROLE
+    MERCH -->|gRPC| USER
+    CARD -->|gRPC| USER
+    TOPUP -->|gRPC| SALDO
+    TOPUP -->|gRPC| TXN
+    TRANSFER -->|gRPC| CARD
+    TRANSFER -->|gRPC| SALDO
+    TRANSFER -->|gRPC| TXN
+    WITHDRAW -->|gRPC| CARD
+    WITHDRAW -->|gRPC| SALDO
+    WITHDRAW -->|gRPC| TXN
+
+    TOPUP -->|Events| KAFKA
+    TRANSFER -->|Events| KAFKA
+    WITHDRAW -->|Events| KAFKA
+
+    KAFKA --> EMAIL
+
+    AUTH -.->|"Metrics"| PROM
+    USER -.->|"Metrics"| PROM
+    ROLE -.->|"Metrics"| PROM
+    MERCH -.->|"Metrics"| PROM
+    CARD -.->|"Metrics"| PROM
+    SALDO -.->|"Metrics"| PROM
+    TOPUP -.->|"Metrics"| PROM
+    TXN -.->|"Metrics"| PROM
+    TRANSFER -.->|"Metrics"| PROM
+    WITHDRAW -.->|"Metrics"| PROM
+    APIGW -.->|"Metrics"| PROM
+
+    AUTH -.->|"Traces"| OTEL
+    USER -.->|"Traces"| OTEL
+    ROLE -.->|"Traces"| OTEL
+    MERCH -.->|"Traces"| OTEL
+    CARD -.->|"Traces"| OTEL
+    SALDO -.->|"Traces"| OTEL
+    TOPUP -.->|"Traces"| OTEL
+    TXN -.->|"Traces"| OTEL
+    TRANSFER -.->|"Traces"| OTEL
+    WITHDRAW -.->|"Traces"| OTEL
+    APIGW -.->|"Traces"| OTEL
+
+    AUTH -.->|"Metrics"| PROM
+    USER -.->|"Metrics"| PROM
+    ROLE -.->|"Metrics"| PROM
+    MERCH -.->|"Metrics"| PROM
+    CARD -.->|"Metrics"| PROM
+    SALDO -.->|"Metrics"| PROM
+    TOPUP -.->|"Metrics"| PROM
+    TXN -.->|"Metrics"| PROM
+    TRANSFER -.->|"Metrics"| PROM
+    WITHDRAW -.->|"Metrics"| PROM
+    APIGW -.->|"Metrics"| PROM
+
+    AUTH -.->|"Traces"| OTEL
+    USER -.->|"Traces"| OTEL
+    ROLE -.->|"Traces"| OTEL
+    MERCH -.->|"Traces"| OTEL
+    CARD -.->|"Traces"| OTEL
+    SALDO -.->|"Traces"| OTEL
+    TOPUP -.->|"Traces"| OTEL
+    TXN -.->|"Traces"| OTEL
+    TRANSFER -.->|"Traces"| OTEL
+    WITHDRAW -.->|"Traces"| OTEL
+    APIGW -.->|"Traces"| OTEL
+
     OTEL -.-> JAEGER
     PROMTAIL -.-> LOKI
     PROM -.-> GRAFANA
     LOKI -.-> GRAFANA
+
+    KAFKA -.-> KAFKAX
+    PG -.-> PGX
+    KAFKAX -.-> PROM
+    PGX -.-> PROM
+    NODEX -.-> PROM
+```
+
+---
+
+### Kubernetes (Production Clustering)
+
+The production-grade Kubernetes architecture is designed for high availability, fault tolerance, and seamless horizontal scaling. All manifests are defined inside the custom `payment-gateway` namespace, route edge traffic using NGINX pods acting as a LoadBalancer, and manage service scalability using individual HPAs.
+
+```mermaid
+flowchart TB
+    classDef client fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:2px,font-weight:bold
+    classDef ingress fill:#0f172a,stroke:#06b6d4,color:#e0f7fa,stroke-width:2px,font-weight:bold
+    classDef k8sSvc fill:#1e293b,stroke:#22d3ee,color:#cffafe,stroke-width:2px,font-weight:bold
+    classDef pod fill:#1e1b4b,stroke:#a78bfa,color:#ede9fe,stroke-width:1.5px
+    classDef stateful fill:#172554,stroke:#60a5fa,color:#dbeafe,stroke-width:1.5px
+    classDef hpa fill:#064e3b,stroke:#34d399,color:#ecfdf5,stroke-width:1px,stroke-dasharray: 5 5
+    classDef obs fill:#052e16,stroke:#4ade80,color:#dcfce7,stroke-width:1.5px
+
+    Client["Client Applications<br/>(HTTPS Requests)"]:::client
+
+    subgraph K8sCluster["Kubernetes Cluster — Namespace: payment-gateway"]
+        direction TB
+
+        subgraph IngressLayer["Edge Reverse Proxy (NGINX)"]
+            NGINX_SVC["nginx-service<br/>(LoadBalancer :80)"]:::k8sSvc
+            NGINX_POD["nginx-pods"]:::pod
+        end
+
+        subgraph GatewayServices["REST API Gateway (Scalable Deployment)"]
+            APIGW_SVC["apigateway-service<br/>(ClusterIP :5000)"]:::k8sSvc
+            APIGW_PODS["apigateway-pods"]:::pod
+            APIGW_HPA["apigateway-hpa"]:::hpa
+        end
+
+        subgraph DomainServices["Internal gRPC Microservices"]
+            direction TB
+            
+            subgraph IdentityZone["Identity Suite"]
+                AUTH_POD["auth-pods"]:::pod
+                USER_POD["user-pods"]:::pod
+                ROLE_POD["role-pods"]:::pod
+                AUTH_SVC["auth-service (gRPC)"]:::k8sSvc
+                USER_SVC["user-service (gRPC)"]:::k8sSvc
+                ROLE_SVC["role-service (gRPC)"]:::k8sSvc
+            end
+
+            subgraph MerchantZone["Merchant Suite"]
+                MERCH_POD["merchant-pods"]:::pod
+                MERCH_SVC["merchant-service (gRPC)"]:::k8sSvc
+            end
+
+            subgraph FinanceZone["Finance & Cards"]
+                CARD_POD["card-pods"]:::pod
+                SALDO_POD["saldo-pods"]:::pod
+                CARD_SVC["card-service (gRPC)"]:::k8sSvc
+                SALDO_SVC["saldo-service (gRPC)"]:::k8sSvc
+            end
+
+            subgraph MovementsZone["Ledgers & Fund Flows"]
+                TOPUP_POD["topup-pods"]:::pod
+                TX_POD["transaction-pods"]:::pod
+                TRANSFER_POD["transfer-pods"]:::pod
+                WITHDRAW_POD["withdraw-pods"]:::pod
+                TOPUP_SVC["topup-service (gRPC)"]:::k8sSvc
+                TX_SVC["transaction-service (gRPC)"]:::k8sSvc
+                TRANSFER_SVC["transfer-service (gRPC)"]:::k8sSvc
+                WITHDRAW_SVC["withdraw-service (gRPC)"]:::k8sSvc
+            end
+            
+            PodsHPA["Domain Services HPAs<br/>(auth, card, merchant, etc.)"]:::hpa
+        end
+
+        subgraph DataObservability["Infrastructure & Databases"]
+            PGB_SVC["pgbouncer-service<br/>(ClusterIP :6432)"]:::k8sSvc
+            PGB_POD["pgbouncer-pods"]:::pod
+
+            PG_SVC["postgres-service<br/>(ClusterIP :5432)"]:::k8sSvc
+            PG_POD["postgres-pods"]:::pod
+            
+            REDIS_SVC["redis-cluster-service<br/>(ClusterIP :6379)"]:::k8sSvc
+            REDIS_SET[("redis-cluster StatefulSet<br/>(6-Node Shards)")]:::stateful
+            
+            KAFKA_SVC["kafka-service<br/>(ClusterIP :9092)"]:::k8sSvc
+            KAFKA_POD["kafka-pods"]:::pod
+        end
+
+        subgraph BackgroundWorkers["Event Consumers"]
+            EMAIL_SVC["email-service<br/>(ClusterIP)"]:::k8sSvc
+            EMAIL_PODS["email-pods"]:::pod
+            EMAIL_HPA["email-hpa"]:::hpa
+        end
+
+        subgraph K8sObs["Observability Namespace Suite"]
+            PROM_SVC["prometheus-service<br/>(ClusterIP :9090)"]:::k8sSvc
+            PROM_POD["prometheus-pod"]:::pod
+
+            OTEL_SVC["otel-collector-service<br/>(ClusterIP :4317)"]:::k8sSvc
+            OTEL_POD["otel-collector-pod"]:::pod
+
+            LOKI_SVC["loki-service<br/>(ClusterIP :3100)"]:::k8sSvc
+            LOKI_POD["loki-pod"]:::pod
+
+            JAEGER_SVC["jaeger-service<br/>(ClusterIP :16686)"]:::k8sSvc
+            JAEGER_POD["jaeger-pod"]:::pod
+
+            GRAFANA_SVC["grafana-service<br/>(ClusterIP :3000)"]:::k8sSvc
+            GRAFANA_POD["grafana-pod"]:::pod
+
+            ALERTMGR_SVC["alertmanager-service<br/>(ClusterIP :9093)"]:::k8sSvc
+            ALERTMGR_POD["alertmanager-pod"]:::pod
+
+            PROMTAIL["promtail-daemonset"]:::pod
+            
+            KAFKAX_SVC["kafka-exporter-service"]:::k8sSvc
+            KAFKAX_POD["kafka-exporter-pod"]:::pod
+
+            NODEX_SVC["node-exporter-service"]:::k8sSvc
+            NODEX_POD["node-exporter-daemonset"]:::pod
+        end
+    end
+
+    Client -->|HTTPS :443| NGINX_SVC
+    NGINX_SVC --> NGINX_POD
+    NGINX_POD -->|Proxy Pass| APIGW_SVC
+    APIGW_SVC --> APIGW_PODS
+    APIGW_HPA -.->|Autoscales| APIGW_PODS
+
+    APIGW_PODS -->|gRPC call| AUTH_SVC
+    APIGW_PODS -->|gRPC call| USER_SVC
+    APIGW_PODS -->|gRPC call| ROLE_SVC
+    APIGW_PODS -->|gRPC call| MERCH_SVC
+    APIGW_PODS -->|gRPC call| CARD_SVC
+    APIGW_PODS -->|gRPC call| SALDO_SVC
+    APIGW_PODS -->|gRPC call| TOPUP_SVC
+    APIGW_PODS -->|gRPC call| TX_SVC
+    APIGW_PODS -->|gRPC call| TRANSFER_SVC
+    APIGW_PODS -->|gRPC call| WITHDRAW_SVC
+    
+    AUTH_SVC --> AUTH_POD
+    USER_SVC --> USER_POD
+    ROLE_SVC --> ROLE_POD
+    MERCH_SVC --> MERCH_POD
+    CARD_SVC --> CARD_POD
+    SALDO_SVC --> SALDO_POD
+    TOPUP_SVC --> TOPUP_POD
+    TX_SVC --> TX_POD
+    TRANSFER_SVC --> TRANSFER_POD
+    WITHDRAW_SVC --> WITHDRAW_POD
+
+    AUTH_POD -->|SQL| PGB_SVC
+    USER_POD -->|SQL| PGB_SVC
+    ROLE_POD -->|SQL| PGB_SVC
+    MERCH_POD -->|SQL| PGB_SVC
+    CARD_POD -->|SQL| PGB_SVC
+    SALDO_POD -->|SQL| PGB_SVC
+    TOPUP_POD -->|SQL| PGB_SVC
+    TX_POD -->|SQL| PGB_SVC
+    TRANSFER_POD -->|SQL| PGB_SVC
+    WITHDRAW_POD -->|SQL| PGB_SVC
+
+    PGB_SVC --> PGB_POD
+    PGB_POD -->|SQL| PG_SVC
+    PG_SVC --> PG_POD
+
+    AUTH_POD -->|Cache| REDIS_SVC
+    USER_POD -->|Cache| REDIS_SVC
+    ROLE_POD -->|Cache| REDIS_SVC
+    MERCH_POD -->|Cache| REDIS_SVC
+    CARD_POD -->|Cache| REDIS_SVC
+    SALDO_POD -->|Cache| REDIS_SVC
+
+    REDIS_SVC --> REDIS_SET
+
+    AUTH_POD -->|gRPC| USER_SVC
+    AUTH_POD -->|gRPC| ROLE_SVC
+    MERCH_POD -->|gRPC| USER_SVC
+    CARD_POD -->|gRPC| USER_SVC
+    TOPUP_POD -->|gRPC| SALDO_SVC
+    TOPUP_POD -->|gRPC| TX_SVC
+    TRANSFER_POD -->|gRPC| CARD_SVC
+    TRANSFER_POD -->|gRPC| SALDO_SVC
+    TRANSFER_POD -->|gRPC| TX_SVC
+    WITHDRAW_POD -->|gRPC| CARD_SVC
+    WITHDRAW_POD -->|gRPC| SALDO_SVC
+    WITHDRAW_POD -->|gRPC| TX_SVC
+
+    TOPUP_POD -->|Events| KAFKA_SVC
+    TRANSFER_POD -->|Events| KAFKA_SVC
+    WITHDRAW_POD -->|Events| KAFKA_SVC
+
+    KAFKA_SVC --> KAFKA_POD
+    KAFKA_POD -->|Message Stream| EMAIL_SVC
+    EMAIL_SVC --> EMAIL_PODS
+    EMAIL_HPA -.->|Autoscales| EMAIL_PODS
+
+    PodsHPA -.->|Autoscales| AUTH_POD
+    PodsHPA -.->|Autoscales| USER_POD
+    PodsHPA -.->|Autoscales| ROLE_POD
+    PodsHPA -.->|Autoscales| MERCH_POD
+    PodsHPA -.->|Autoscales| CARD_POD
+    PodsHPA -.->|Autoscales| SALDO_POD
+    PodsHPA -.->|Autoscales| TOPUP_POD
+    PodsHPA -.->|Autoscales| TX_POD
+    PodsHPA -.->|Autoscales| TRANSFER_POD
+    PodsHPA -.->|Autoscales| WITHDRAW_POD
+
+    AUTH_POD -.->|"Metrics"| PROM_SVC
+    USER_POD -.->|"Metrics"| PROM_SVC
+    ROLE_POD -.->|"Metrics"| PROM_SVC
+    MERCH_POD -.->|"Metrics"| PROM_SVC
+    CARD_POD -.->|"Metrics"| PROM_SVC
+    SALDO_POD -.->|"Metrics"| PROM_SVC
+    TOPUP_POD -.->|"Metrics"| PROM_SVC
+    TX_POD -.->|"Metrics"| PROM_SVC
+    TRANSFER_POD -.->|"Metrics"| PROM_SVC
+    WITHDRAW_POD -.->|"Metrics"| PROM_SVC
+    APIGW_PODS -.->|"Metrics"| PROM_SVC
+
+    AUTH_POD -.->|"Traces"| OTEL_SVC
+    USER_POD -.->|"Traces"| OTEL_SVC
+    ROLE_POD -.->|"Traces"| OTEL_SVC
+    MERCH_POD -.->|"Traces"| OTEL_SVC
+    CARD_POD -.->|"Traces"| OTEL_SVC
+    SALDO_POD -.->|"Traces"| OTEL_SVC
+    TOPUP_POD -.->|"Traces"| OTEL_SVC
+    TX_POD -.->|"Traces"| OTEL_SVC
+    TRANSFER_POD -.->|"Traces"| OTEL_SVC
+    WITHDRAW_POD -.->|"Traces"| OTEL_SVC
+    APIGW_PODS -.->|"Traces"| OTEL_SVC
+
+    PROM_SVC --> PROM_POD
+    OTEL_SVC --> OTEL_POD
+    LOKI_SVC --> LOKI_POD
+    JAEGER_SVC --> JAEGER_POD
+    GRAFANA_SVC --> GRAFANA_POD
+    ALERTMGR_SVC --> ALERTMGR_POD
+
+    OTEL_POD -.-> JAEGER_SVC
+    PROMTAIL -.-> LOKI_SVC
+    PROM_POD -.-> GRAFANA_SVC
+    LOKI_POD -.-> GRAFANA_SVC
+    PROM_POD -.-> ALERTMGR_SVC
+
+    KAFKA_SVC -.-> KAFKAX_SVC
+    KAFKAX_SVC --> KAFKAX_POD
+    KAFKAX_POD -.-> PROM_SVC
+    NODEX_SVC --> NODEX_POD
+    NODEX_POD -.-> PROM_SVC
 ```
 
 ---
@@ -482,7 +871,6 @@ flowchart TD
 | **Messaging Stream** | Apache Kafka | Asynchronous high-throughput messaging event bus (KRaft mode). |
 | **Token Manager** | JWT | Secure stateless request authentication standard. |
 | **Observability** | OpenTelemetry + Jaeger | Vendor-neutral distributed telemetry pipeline and visualization. |
-| **Continuous Profiler** | Pyroscope | Real-time memory allocation tracker to identify hot paths. |
 | **Docker Engine** | Compose | Local environment virtualization orchestration. |
 | **Orchestrator** | Kubernetes | Production-scale auto-scaling pod clustering infrastructure. |
 
@@ -496,7 +884,7 @@ Ensure the following system packages are locally configured:
 
 - [Git](https://git-scm.com/)
 - [Java Development Kit (JDK 21+)](https://adoptium.net/)
-- [Apache Maven](https://maven.apache.org/) (v3.9+)
+- [Apache Maven](https://maven.org/) (v3.9+)
 - [Docker](https://www.docker.com/) & [Docker Compose](https://docs.docker.com/compose/)
 - [Protobuf Compiler](https://grpc.io/docs/protoc-installation/) (optional)
 
@@ -558,7 +946,6 @@ docker-compose -f deployments/local/docker-compose.yml ps
 | **Grafana Dashboard Portal** | [http://localhost:3000](http://localhost:3000) *(Credentials: `admin`/`admin`)* |
 | **Prometheus Telemetry** | [http://localhost:9090](http://localhost:9090) |
 | **Jaeger Distributed Tracing** | [http://localhost:16686](http://localhost:16686) |
-| **Pyroscope Profiling Panel** | [http://localhost:4040](http://localhost:4040) |
 | **PgBouncer Gateway Node** | `localhost:6432` |
 | **PostgreSQL Database Engine** | `localhost:5432` |
 
@@ -607,18 +994,18 @@ vertx-payment-gateway/
 │       ├── observability/          #   TracingMetrics config
 │       ├── service/                #   RedisService utilities
 │       └── pb/                     #   Compiled Java Protobuf gRPC stubs
-├── apigateway/                     # REST API Gateway (REST Router proxying to gRPC)
-├── auth/                           # Authentication engine verticle
-├── user/                           # User profiles verticle (CQRS)
-├── role/                           # RBAC authorization verticle
-├── merchant/                       # Merchant onboarding & reports verticle
-├── card/                           # Virtual Card & Analytics verticle
-├── saldo/                          # Real-time balance ledger verticle
-├── topup/                          # Funding ledger verticle
-├── transaction/                    # Central transaction ledger audit verticle
-├── transfer/                       # P2P fund transfer verticle
-├── withdraw/                       # Outbound bank settlement verticle
-├── email/                          # Asynchronous Kafka notifications verticle
+├── apigateway/                     # REST API Gateway (Vert.x Router proxying to gRPC)
+├── auth/                           # Authentication engine service
+├── user/                           # User profiles service (CQRS)
+├── role/                           # RBAC authorization service
+├── merchant/                       # Merchant onboarding & reports service
+├── card/                           # Virtual Card & Analytics service
+├── saldo/                          # Real-time balance ledger service
+├── topup/                          # Funding ledger service
+├── transaction/                    # Central transaction ledger audit service
+├── transfer/                       # P2P fund transfer service
+├── withdraw/                       # Outbound bank settlement service
+├── email/                          # Asynchronous Kafka notifications service
 ├── deployments/
 │   ├── local/                      #   Docker compose infrastructure files
 │   └── kubernetes/                 #   Production K8s deployment manifests
@@ -627,52 +1014,6 @@ vertx-payment-gateway/
 ├── nginx/                          #   Reverse-proxy NGINX rules
 └── images/                         #   Architecture diagrams & dashboard screenshots
 ```
-
----
-
-## Screenshots
-
-### Database Schema (ERD)
-
-![Payment Gateway Database Schema](./images/Payment%20Gateway.png)
-
-### System Deployments Architecture
-
-#### Local Development Deployment Architecture (Docker Compose)
-
-![Docker Compose Architecture](./images/archictecture_docker_payment_gateway.png)
-
-#### Production Ready Clustering Architecture (Kubernetes)
-
-![Kubernetes Production Architecture](./images/archictecture_kubernetes_payment_gateway.png)
-
-### Observability Metrics & Dashboards
-
-The platform features tailored Grafana Dashboards displaying sub-second metrics, transaction rates, memory profiles, cache states, and database logs for every service:
-
-![Auth Service Metrics](./images/auth-service.png)
-<!-- slide -->
-![Card Service Metrics](./images/card-service.png)
-<!-- slide -->
-![Email Service Metrics](./images/email-service.png)
-<!-- slide -->
-![Merchant Service Metrics](./images/merchant-service.png)
-<!-- slide -->
-![Role Service Metrics](./images/role-service.png)
-<!-- slide -->
-![Saldo Service Metrics](./images/saldo-service.png)
-<!-- slide -->
-![Topup Service Metrics](./images/topup-service.png)
-<!-- slide -->
-![Transaction Service Metrics](./images/transaction-service.png)
-<!-- slide -->
-![Transfer Service Metrics](./images/transfer-service.png)
-<!-- slide -->
-![User Service Metrics](./images/user-service.png)
-<!-- slide -->
-![Withdraw Service Metrics](./images/withdraw-service.png)
-<!-- slide -->
-![Node Exporter System Metrics](./images/node-exporter.png)
 
 ---
 

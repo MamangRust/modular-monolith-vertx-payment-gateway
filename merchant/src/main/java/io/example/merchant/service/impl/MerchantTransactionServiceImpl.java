@@ -1,146 +1,141 @@
 package io.example.merchant.service.impl;
 
-import java.util.List;
 import java.time.Duration;
-import io.example.common.model.ApiResponsePagination;
-import io.example.common.model.PaginationMeta;
+import java.util.Objects;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.example.common.domain.PagedResult;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
 import io.example.merchant.model.MerchantTransactions;
 import io.example.merchant.repository.MerchantTransactionRepository;
 import io.example.merchant.service.MerchantTransactionService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
+import lombok.RequiredArgsConstructor;
 import pb.merchant.Merchant.FindAllMerchantTransaction;
 import pb.merchant.Merchant.FindAllMerchantTransactionApikey;
 import pb.merchant.Merchant.FindAllMerchantTransactionId;
 
+@RequiredArgsConstructor
 public class MerchantTransactionServiceImpl implements MerchantTransactionService {
+  private static final Logger logger = LoggerFactory.getLogger(MerchantTransactionServiceImpl.class);
+  private static final ObjectMapper mapper = new ObjectMapper();
+
   private final MerchantTransactionRepository repo;
-  private final RedisService redisService;
-  private final TracingMetrics tracingMetrics;
+  private final RedisService redis;
+  private final TracingMetrics metrics;
   private static final String CACHE_PREFIX = "transactions:";
+  private static final Duration CACHE_TTL = Duration.ofMinutes(5);
 
-  public MerchantTransactionServiceImpl(MerchantTransactionRepository repo, RedisService redisService,
-      TracingMetrics tracingMetrics) {
-    this.repo = repo;
-    this.redisService = redisService;
-    this.tracingMetrics = tracingMetrics;
+  private int safePage(int page) {
+    return page > 0 ? page : 1;
+  }
+
+  private int safePageSize(int size) {
+    return size > 0 ? size : 10;
+  }
+
+  private String safeKeyword(String search) {
+    return (search != null && !search.isEmpty()) ? search : "";
   }
 
   @Override
-  public Future<ApiResponsePagination<List<MerchantTransactions>>> getTransactions(FindAllMerchantTransaction req) {
-    TracingMetrics.TracingContext ctx = tracingMetrics.startSpan("MerchantTransactionService.getTransactions");
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String cacheKey = CACHE_PREFIX + "all:" + page + ":" + pageSize + ":"
-        + (req.getSearch() != null ? req.getSearch() : "none");
+  public Future<PagedResult<MerchantTransactions>> getTransactions(FindAllMerchantTransaction req) {
+    var ctx = metrics.startSpan("MerchantTransactionService.getTransactions");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
-    return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            JsonObject json = new JsonObject(cached);
-            List<MerchantTransactions> list = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(MerchantTransactions.class)).toList();
-            int total = json.getInteger("total");
-            int totalPages = (pageSize > 0) ? (int) Math.ceil((double) total / pageSize) : 0;
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Transactions fetched from cache",
-                list, new PaginationMeta(page, pageSize, totalPages, total)));
+    int page = safePage(req.getPage());
+    int pageSize = safePageSize(req.getPageSize());
+    String keyword = safeKeyword(req.getSearch());
+    String cacheKey = String.format("%sall:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);
+
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("transaction.cache_hit", true);
+              PagedResult<MerchantTransactions> cached = mapper.readValue(jsonStr,
+                  new TypeReference<PagedResult<MerchantTransactions>>() {
+                  });
+              return Future.succeededFuture(cached);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached transactions: {}", e.getMessage());
+            }
           }
+          span.setAttribute("transaction.cache_hit", false);
           return repo.findAllTransactionMerchant(req)
-              .onSuccess(res -> {
-                JsonObject cacheData = new JsonObject()
-                    .put("data", new JsonArray(res.getData().stream().map(JsonObject::mapFrom).toList()))
-                    .put("total", res.getTotalRecords());
-                redisService.setJson(cacheKey, cacheData, Duration.ofMinutes(5));
-              })
-              .map(res -> {
-                int total = res.getTotalRecords();
-                int totalPages = (pageSize > 0) ? (int) Math.ceil((double) total / pageSize) : 0;
-                return new ApiResponsePagination<>("success", "Transactions fetched", res.getData(),
-                    new PaginationMeta(page, pageSize, totalPages, total));
-              });
+              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result));
         })
-        .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "getTransactions", "Success"))
-        .onFailure(e -> tracingMetrics.completeSpanError(ctx, "getTransactions", e.getMessage()));
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getTransactions", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getTransactions", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<MerchantTransactions>>> getTransactionsByApiKey(
-      FindAllMerchantTransactionApikey req) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantTransactionService.getTransactionsByApiKey");
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String cacheKey = CACHE_PREFIX + "apikey:" + req.getApiKey() + ":" + page + ":" + pageSize + ":"
-        + (req.getSearch() != null ? req.getSearch() : "none");
+  public Future<PagedResult<MerchantTransactions>> getTransactionsByApiKey(FindAllMerchantTransactionApikey req) {
+    var ctx = metrics.startSpan("MerchantTransactionService.getTransactionsByApiKey");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
-    return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            JsonObject json = new JsonObject(cached);
-            List<MerchantTransactions> list = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(MerchantTransactions.class)).toList();
-            int total = json.getInteger("total");
-            int totalPages = (pageSize > 0) ? (int) Math.ceil((double) total / pageSize) : 0;
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Transactions fetched from cache",
-                list, new PaginationMeta(page, pageSize, totalPages, total)));
+    int page = safePage(req.getPage());
+    int pageSize = safePageSize(req.getPageSize());
+    String keyword = safeKeyword(req.getSearch());
+    String cacheKey = String.format("%sapikey:%s:p:%d:s:%d:k:%s", CACHE_PREFIX, req.getApiKey(), page, pageSize,
+        keyword);
+
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("transaction.cache_hit", true);
+              PagedResult<MerchantTransactions> cached = mapper.readValue(jsonStr,
+                  new TypeReference<PagedResult<MerchantTransactions>>() {
+                  });
+              return Future.succeededFuture(cached);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached transactions by apikey: {}", e.getMessage());
+            }
           }
+          span.setAttribute("transaction.cache_hit", false);
           return repo.findAllTransactionByApikey(req)
-              .onSuccess(res -> {
-                JsonObject cacheData = new JsonObject()
-                    .put("data", new JsonArray(res.getData().stream().map(JsonObject::mapFrom).toList()))
-                    .put("total", res.getTotalRecords());
-                redisService.setJson(cacheKey, cacheData, Duration.ofMinutes(5));
-              })
-              .map(res -> {
-                int total = res.getTotalRecords();
-                int totalPages = (pageSize > 0) ? (int) Math.ceil((double) total / pageSize) : 0;
-                return new ApiResponsePagination<>("success", "Transactions fetched", res.getData(),
-                    new PaginationMeta(page, pageSize, totalPages, total));
-              });
+              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result));
         })
-        .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "getTransactionsByApiKey", "Success"))
-        .onFailure(e -> tracingMetrics.completeSpanError(ctx, "getTransactionsByApiKey", e.getMessage()));
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getTransactionsByApiKey", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getTransactionsByApiKey", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<MerchantTransactions>>> getTransactionsByMerchantId(
-      FindAllMerchantTransactionId req) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantTransactionService.getTransactionsByMerchantId");
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String cacheKey = CACHE_PREFIX + "merchant:" + req.getId() + ":" + page + ":" + pageSize + ":"
-        + (req.getSearch() != null ? req.getSearch() : "none");
+  public Future<PagedResult<MerchantTransactions>> getTransactionsByMerchantId(FindAllMerchantTransactionId req) {
+    var ctx = metrics.startSpan("MerchantTransactionService.getTransactionsByMerchantId");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
-    return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            JsonObject json = new JsonObject(cached);
-            List<MerchantTransactions> list = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(MerchantTransactions.class)).toList();
-            int total = json.getInteger("total");
-            int totalPages = (pageSize > 0) ? (int) Math.ceil((double) total / pageSize) : 0;
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Transactions fetched from cache",
-                list, new PaginationMeta(page, pageSize, totalPages, total)));
+    int page = safePage(req.getPage());
+    int pageSize = safePageSize(req.getPageSize());
+    String keyword = safeKeyword(req.getSearch());
+    String cacheKey = String.format("%smerchant:%d:p:%d:s:%d:k:%s", CACHE_PREFIX, req.getId(), page, pageSize, keyword);
+
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("transaction.cache_hit", true);
+              PagedResult<MerchantTransactions> cached = mapper.readValue(jsonStr,
+                  new TypeReference<PagedResult<MerchantTransactions>>() {
+                  });
+              return Future.succeededFuture(cached);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached transactions by merchantId: {}", e.getMessage());
+            }
           }
+          span.setAttribute("transaction.cache_hit", false);
           return repo.findAllTransactionByMerchant(req)
-              .onSuccess(res -> {
-                JsonObject cacheData = new JsonObject()
-                    .put("data", new JsonArray(res.getData().stream().map(JsonObject::mapFrom).toList()))
-                    .put("total", res.getTotalRecords());
-                redisService.setJson(cacheKey, cacheData, Duration.ofMinutes(5));
-              })
-              .map(res -> {
-                int total = res.getTotalRecords();
-                int totalPages = (pageSize > 0) ? (int) Math.ceil((double) total / pageSize) : 0;
-                return new ApiResponsePagination<>("success", "Transactions fetched", res.getData(),
-                    new PaginationMeta(page, pageSize, totalPages, total));
-              });
+              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result));
         })
-        .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "getTransactionsByMerchantId", "Success"))
-        .onFailure(e -> tracingMetrics.completeSpanError(ctx, "getTransactionsByMerchantId", e.getMessage()));
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getTransactionsByMerchantId", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getTransactionsByMerchantId", e.getMessage()));
   }
 }

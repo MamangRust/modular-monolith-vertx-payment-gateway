@@ -23,6 +23,7 @@ The platform is fortified with a **comprehensive observability suite** (Promethe
 | **Withdraw** | Funds settlement from user cards to external accounts/banks, daily transaction threshold limits, and status processing pipelines. |
 | **Email Worker** | Kafka-driven asynchronous worker dispatching critical notification emails (OTPs, login alerts, merchant onboarding notices, and transfer/topup invoices) via SMTP. |
 | **Observability** | Multi-dimensional metrics (Prometheus + Grafana), log aggregation (Loki + Logback), end-to-end distributed tracing (Jaeger + OpenTelemetry), and resource monitors (Node, Kafka, Postgres Exporters). |
+| **Chaos Engine** | Built-in reactive chaos injection framework supporting dynamic YAML-based policies for HTTP routing, database/SQL interceptors, and resource stress constraints (CPU/Memory). |
 | **Deployment** | Local orchestration using Docker Compose (featuring a 6-node Redis Cluster and PgBouncer), and auto-scaling Kubernetes manifests configured with Horizontal Pod Autoscalers (HPA). |
 
 ---
@@ -422,6 +423,42 @@ graph TB
 | **Logging** | Loki + Logback | Centralized structured JSON logger for indexing logs by service, queryable via LogQL. |
 | **Tracing** | OpenTelemetry + Jaeger | Distributed system tracing across API gateway and internal gRPC services. |
 | **Alerting** | Alertmanager | Automated notification system triggered during latency hikes or service disconnects. |
+
+
+## Chaos Engineering Platform
+
+The payment gateway features a built-in **reactive Chaos Engineering engine** to continuously test system resilience under failure conditions (database spikes, slow endpoints, CPU stress, and memory leaks). 
+
+### How It Works
+The chaos engine is managed by [ChaosManager.java](./common/src/main/java/io/example/common/chaos/ChaosManager.java) which dynamically watches the configuration file [chaos.yaml](./chaos.yaml) for modifications:
+- **Dynamic Hot-Reloading**: Every 5 seconds, the engine checks `chaos.yaml` for changes. Adjusting values or toggling policies will update the running system instantly without requiring a service restart.
+
+### Injection Mechanisms
+1. **HTTP Routing Chaos** ([ChaosHttpMiddleware.java](./common/src/main/java/io/example/common/chaos/ChaosHttpMiddleware.java)): Intercepts API router entry points to inject specified latency hikes or HTTP errors (e.g., status code 429 - rate limits).
+2. **Database SQL Chaos** ([ChaosSqlProxy.java](./common/src/main/java/io/example/common/chaos/ChaosSqlProxy.java)): Wraps database clients in a dynamic proxy, injecting database transaction latency or simulating sudden lock wait timeouts/deadlocks when queries hit matching tables.
+3. **Resource Stress Chaos** ([ChaosResourceSabotage.java](.//common/src/main/java/io/example/common/chaos/ChaosResourceSabotage.java)): Spawns CPU/memory pressure routines to simulate container hardware throttling or memory exhaustion.
+
+### Configuration Example (`chaos.yaml`)
+To simulate failures, configure policies in [chaos.yaml](./chaos.yaml):
+```yaml
+policies:
+  - name: "http-get-saldos-limit"
+    type: "http"
+    target: "GET:/api/saldos"
+    enabled: true        # Enable to inject 1000ms latency and 429 status code with 50% chance
+    errorChance: 0.5
+    errorCode: 429
+    errorBody: '{"error":"too_many_requests","message":"Rate limit exceeded"}'
+    latencyMs: 1000
+
+  - name: "sql-user-query-deadlock"
+    type: "sql"
+    target: "users"
+    enabled: false
+    errorChance: 0.2
+    errorMessage: "ERROR: deadlock detected"
+    latencyMs: 500
+```
 
 ---
 
@@ -852,7 +889,127 @@ flowchart TB
     KAFKAX_SVC --> KAFKAX_POD
     KAFKAX_POD -.-> PROM_SVC
     NODEX_SVC --> NODEX_POD
-    NODEX_POD -.-> PROM_SVC
+    NODEX_SVC -.-> PROM_SVC
+```
+
+### ArgoCD App-of-Apps GitOps Architecture
+
+The platform follows GitOps best practices using ArgoCD for declarative continuous deployments. Replicating the App-of-Apps design pattern, a root Application (`payment-gateway-root`) automatically manages and tracks the states of individual child Applications mapping to Kustomize bases.
+
+Sync waves (`argocd.argoproj.io/sync-wave` annotations) are strictly defined to guarantee database migrations run and complete before domain applications start.
+
+```mermaid
+graph TD
+    classDef root fill:#1e293b,stroke:#22d3ee,color:#cffafe,stroke-width:2.5px,font-weight:bold
+    classDef proj fill:#0f172a,stroke:#38bdf8,color:#e0f2fe,stroke-width:2px
+    classDef app fill:#1e1b4b,stroke:#a78bfa,color:#ede9fe,stroke-width:1.5px
+    classDef wave fill:#1c1917,stroke:#f59e0b,color:#fef3c7,stroke-width:1.5px
+    classDef base fill:#052e16,stroke:#34d399,color:#dcfce7,stroke-width:1.5px
+
+    RootApp["payment-gateway-root<br/>(ArgoCD Root Application)"]:::root
+    AppProj["payment-gateway<br/>(ArgoCD AppProject)"]:::proj
+
+    RootApp -->|Creates & Tracks| AppProj
+    RootApp -->|Deploys Application Manifests| AppIndex["Child Applications List<br/>(deployments/gitops/argocd/apps/)"]:::app
+
+    subgraph SyncWaves["Ordered Deployment Sequencing (Sync Waves 1 - 6)"]
+        direction TB
+
+        subgraph Wave1["Wave 1: Namespace & Infrastructure"]
+            W1_CM["common"]:::wave
+            W1_PG["infra-postgres"]:::wave
+            W1_RD["infra-redis"]:::wave
+            W1_KF["infra-kafka"]:::wave
+        end
+
+        subgraph Wave2["Wave 2: Database Migration"]
+            W2_MIG["db-migration"]:::wave
+        end
+
+        subgraph Wave3["Wave 3: Core Services & Gateway Pooler"]
+            W3_PGB["pgbouncer"]:::wave
+            W3_AUTH["service-auth"]:::wave
+            W3_USR["service-user"]:::wave
+            W3_ROL["service-role"]:::wave
+            W3_CRD["service-card"]:::wave
+            W3_MER["service-merchant"]:::wave
+            W3_SLD["service-saldo"]:::wave
+            W3_EML["service-email"]:::wave
+        end
+
+        subgraph Wave4["Wave 4: Financial Movements"]
+            W4_TOP["service-topup"]:::wave
+            W4_TRF["service-transfer"]:::wave
+            W4_WIT["service-withdraw"]:::wave
+            W4_TXN["service-transaction"]:::wave
+        end
+
+        subgraph Wave5["Wave 5: Reverse Proxy Gateway"]
+            W5_APIGW["apigateway"]:::wave
+            W5_NGINX["nginx"]:::wave
+        end
+
+        subgraph Wave6["Wave 6: Observability Suite"]
+            W6_OBS["service-observability"]:::wave
+        end
+
+        Wave1 -->|Triggers next wave| Wave2
+        Wave2 -->|Triggers next wave| Wave3
+        Wave3 -->|Triggers next wave| Wave4
+        Wave4 -->|Triggers next wave| Wave5
+        Wave5 -->|Triggers next wave| Wave6
+    end
+
+    AppIndex -->|Deploys| Wave1
+    AppIndex -->|Deploys| Wave2
+    AppIndex -->|Deploys| Wave3
+    AppIndex -->|Deploys| Wave4
+    AppIndex -->|Deploys| Wave5
+    AppIndex -->|Deploys| Wave6
+
+    subgraph K8sBases["Target: Kustomize Base Resources"]
+        B_COMMON["deployments/kubernetes/base/common"]:::base
+        B_PG["deployments/kubernetes/base/postgres"]:::base
+        B_RD["deployments/kubernetes/base/redis"]:::base
+        B_KF["deployments/kubernetes/base/kafka"]:::base
+        B_MIG["deployments/kubernetes/base/db-migration"]:::base
+        B_PGB["deployments/kubernetes/base/pgbouncer"]:::base
+        B_AUTH["deployments/kubernetes/base/auth"]:::base
+        B_USR["deployments/kubernetes/base/user"]:::base
+        B_ROL["deployments/kubernetes/base/role"]:::base
+        B_CRD["deployments/kubernetes/base/card"]:::base
+        B_MER["deployments/kubernetes/base/merchant"]:::base
+        B_SLD["deployments/kubernetes/base/saldo"]:::base
+        B_EML["deployments/kubernetes/base/email"]:::base
+        B_TOP["deployments/kubernetes/base/topup"]:::base
+        B_TRF["deployments/kubernetes/base/transfer"]:::base
+        B_WIT["deployments/kubernetes/base/withdraw"]:::base
+        B_TXN["deployments/kubernetes/base/transaction"]:::base
+        B_APIGW["deployments/kubernetes/base/apigateway"]:::base
+        B_NGINX["deployments/kubernetes/base/nginx"]:::base
+        B_OBS["deployments/kubernetes/base/observability"]:::base
+    end
+
+    W1_CM -->|Reconciles| B_COMMON
+    W1_PG -->|Reconciles| B_PG
+    W1_RD -->|Reconciles| B_RD
+    W1_KF -->|Reconciles| B_KF
+    W2_MIG -->|Reconciles| B_MIG
+    W3_PGB -->|Reconciles| B_PGB
+    W3_AUTH -->|Reconciles| B_AUTH
+    W3_USR -->|Reconciles| B_USR
+    W3_ROL -->|Reconciles| B_ROL
+    W3_CRD -->|Reconciles| B_CRD
+    W3_MER -->|Reconciles| B_MER
+    W3_SLD -->|Reconciles| B_SLD
+    W3_EML -->|Reconciles| B_EML
+    W4_TOP -->|Reconciles| B_TOP
+    W4_TRF -->|Reconciles| B_TRF
+    W4_WIT -->|Reconciles| B_WIT
+    W4_TXN -->|Reconciles| B_TXN
+    W5_APIGW -->|Reconciles| B_APIGW
+    W5_NGINX -->|Reconciles| B_NGINX
+    W6_OBS -->|Reconciles| B_OBS
 ```
 
 ---
@@ -873,6 +1030,30 @@ flowchart TB
 | **Observability** | OpenTelemetry + Jaeger | Vendor-neutral distributed telemetry pipeline and visualization. |
 | **Docker Engine** | Compose | Local environment virtualization orchestration. |
 | **Orchestrator** | Kubernetes | Production-scale auto-scaling pod clustering infrastructure. |
+
+---
+
+## CI/CD & DevSecOps
+
+The platform enforces strict DevSecOps practices using automated verification and security scanning workflows:
+
+### GitHub Actions Pipeline
+The automated workflow in [.github/workflows/ci.yml](file:///.github/workflows/ci.yml) triggers on every push and pull request to the `main` or `master` branches, performing the following steps:
+1. **Compilation Check**: Sets up JDK 21 (Temurin) with Maven caching to build the Java code.
+2. **Docker Image Builds**: Builds the 13 microservice images via Docker Buildx (utilizing BuildKit cache mounts to optimize build times).
+3. **Trivy Filesystem & Secret Scan**: Audits dependencies for CVE vulnerabilities and scans files for exposed keys/secrets.
+4. **Trivy IaC Audit**: Audits Kubernetes manifests and Docker Compose configurations for security misconfigurations.
+5. **Trivy Image Scan**: Scans the built container images (e.g., `auth:latest`) for vulnerabilities.
+
+Any high or critical findings will automatically fail the build, preventing insecure code or credentials from merging.
+
+### Local Security Scanning
+You can audit your local workspace (vulnerabilities, hardcoded secrets, and Kubernetes/Compose configurations) using our pre-configured Trivy Docker scanner script:
+```bash
+./deployments/trivy/scan.sh
+```
+
+For more details on local scanning and deploying the **Trivy Kubernetes Operator** to monitor runtime workloads in your cluster, refer to the [Trivy DevSecOps Guide](file:///deployments/trivy/README.md).
 
 ---
 
@@ -975,6 +1156,7 @@ docker-compose -f deployments/local/docker-compose.yml down -v
 ```
 vertx-payment-gateway/
 ├── pom.xml                         # Root Maven Parent POM
+├── chaos.yaml                      # Chaos Engineering policies configuration file
 ├── proto/                          # Protobuf contracts (12 domains)
 │   ├── auth.proto                  #   Identity tokens contracts
 │   ├── card/                       #   Virtual Card specifications
@@ -991,6 +1173,7 @@ vertx-payment-gateway/
 ├── common/                         # Shared Maven library Module
 │   └── src/main/java/io/example/common/
 │       ├── config/                 #   AppConfig, JwtConfig, RedisConfig, FlywayConfig
+│       ├── chaos/                  #   Chaos Engineering engine (Manager, SQL proxy, HTTP middleware, resource sabotage)
 │       ├── observability/          #   TracingMetrics config
 │       ├── service/                #   RedisService utilities
 │       └── pb/                     #   Compiled Java Protobuf gRPC stubs
@@ -1006,9 +1189,11 @@ vertx-payment-gateway/
 ├── transfer/                       # P2P fund transfer service
 ├── withdraw/                       # Outbound bank settlement service
 ├── email/                          # Asynchronous Kafka notifications service
+├── db-migration/                   # Standalone database migration runner (Flyway)
 ├── deployments/
 │   ├── local/                      #   Docker compose infrastructure files
-│   └── kubernetes/                 #   Production K8s deployment manifests
+│   ├── kubernetes/                 #   Production K8s deployment bases
+│   └── gitops/                     #   ArgoCD App-of-Apps configuration layouts
 ├── observability/                  #   Telemetry pipelines configurations (Loki, OTEL, Alertmanager)
 ├── grafana/                        #   Pre-configured dashboard JSON files
 ├── nginx/                          #   Reverse-proxy NGINX rules

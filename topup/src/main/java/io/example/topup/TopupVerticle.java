@@ -3,6 +3,10 @@ package io.example.topup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
@@ -34,8 +38,10 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.grpc.server.GrpcServer;
@@ -54,17 +60,18 @@ public class TopupVerticle extends AbstractVerticle {
   private TelemetryConfig telemetryConfig;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
+  private ChaosManager chaosManager;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8087)
         .put("card_service_host", "localhost")
@@ -114,14 +121,18 @@ public class TopupVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
-    var queryRepo = new TopupQueryRepositoryImpl(pool);
-    var cmdRepo = new TopupCommandRepositoryImpl(pool);
-    var statsAmountRepo = new TopupStatsAmountRepositoryImpl(pool);
-    var statsAmountCardRepo = new TopupStatsByCardAmountRepositoryImpl(pool);
-    var statsMethodRepo = new TopupStatsMethodRepositoryImpl(pool);
-    var statsMethodCardRepo = new TopupStatsByCardMethodRepositoryImpl(pool);
-    var statsStatusRepo = new TopupStatsStatusRepositoryImpl(pool);
-    var statsStatusCardRepo = new TopupStatsByCardStatusRepositoryImpl(pool);
+    this.chaosManager = new ChaosManager();
+    this.chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    var queryRepo = new TopupQueryRepositoryImpl(chaosPool);
+    var cmdRepo = new TopupCommandRepositoryImpl(chaosPool);
+    var statsAmountRepo = new TopupStatsAmountRepositoryImpl(chaosPool);
+    var statsAmountCardRepo = new TopupStatsByCardAmountRepositoryImpl(chaosPool);
+    var statsMethodRepo = new TopupStatsMethodRepositoryImpl(chaosPool);
+    var statsMethodCardRepo = new TopupStatsByCardMethodRepositoryImpl(chaosPool);
+    var statsStatusRepo = new TopupStatsStatusRepositoryImpl(chaosPool);
+    var statsStatusCardRepo = new TopupStatsByCardStatusRepositoryImpl(chaosPool);
 
     // 3. Initialize gRPC Clients
     this.grpcClient = GrpcClient.client(vertx);
@@ -145,7 +156,8 @@ public class TopupVerticle extends AbstractVerticle {
     // 4. Initialize Caching & Messaging
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
-    this.kafkaService = new KafkaService(KafkaConfig.createProducer(vertx));
+    this.kafkaService = new KafkaService(
+        ChaosKafkaInterceptor.wrap(KafkaConfig.createProducer(vertx), chaosManager, vertx));
 
     // 5. Initialize Services
     var queryService = new TopupQueryServiceImpl(queryRepo, redisService, tracingMetrics);
@@ -210,8 +222,11 @@ public class TopupVerticle extends AbstractVerticle {
     statsMethodHandler.bindAll(grpcServer);
     statsStatusHandler.bindAll(grpcServer);
 
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

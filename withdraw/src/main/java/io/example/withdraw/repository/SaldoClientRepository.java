@@ -1,23 +1,22 @@
 package io.example.withdraw.repository;
 
-import io.example.common.exception.NotFoundException;
+import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
+import io.example.withdraw.domain.requests.UpdateSaldoBalance;
 import pb.saldo.Saldo.*;
 import pb.saldo.SaldoCommand.*;
 import pb.saldo.VertxSaldoCommandServiceGrpcClient;
 import pb.saldo.VertxSaldoQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class SaldoClientRepository {
   private final VertxSaldoQueryServiceGrpcClient queryStub;
   private final VertxSaldoCommandServiceGrpcClient commandStub;
 
-  public SaldoClientRepository(VertxSaldoQueryServiceGrpcClient queryStub, VertxSaldoCommandServiceGrpcClient commandStub) {
-    this.queryStub = queryStub;
-    this.commandStub = commandStub;
-  }
-
   public Future<ApiResponseSaldo> getSaldoByCardNumber(String cardNumber) {
-    return queryStub.findByCardNumber(pb.card.Card.FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
+    return queryStub
+        .findByCardNumber(pb.card.Card.FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {
             return Future.failedFuture(new NotFoundException(resp.getMessage()));
@@ -26,10 +25,10 @@ public class SaldoClientRepository {
         });
   }
 
-  public Future<ApiResponseSaldo> updateSaldoBalance(String cardNumber, int newBalance) {
+  public Future<ApiResponseSaldo> updateSaldoBalance(UpdateSaldoBalance request) {
     return commandStub.updateSaldoBalance(UpdateSaldoBalanceRequest.newBuilder()
-        .setCardNumber(cardNumber)
-        .setTotalBalance(newBalance)
+        .setCardNumber(request.getCardNumber())
+        .setTotalBalance(request.getTotalBalance())
         .build())
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {

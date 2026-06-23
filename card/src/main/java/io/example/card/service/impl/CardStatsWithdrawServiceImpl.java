@@ -1,93 +1,128 @@
 package io.example.card.service.impl;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.example.card.domain.requests.MonthYearCardNumberCard;
 import io.example.card.model.CardStats;
 import io.example.card.repository.CardStatsWithdrawByCardRepository;
 import io.example.card.repository.CardStatsWithdrawRepository;
 import io.example.card.service.CardStatsWithdrawService;
-import io.example.common.domain.ApiResponse;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import java.time.Duration;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class CardStatsWithdrawServiceImpl implements CardStatsWithdrawService {
   private final CardStatsWithdrawRepository repository;
   private final CardStatsWithdrawByCardRepository byCardRepository;
   private final RedisService redis;
   private final TracingMetrics metrics;
+  private static final ObjectMapper mapper = new ObjectMapper();
   private static final Duration CACHE_TTL = Duration.ofMinutes(15);
 
-  public CardStatsWithdrawServiceImpl(CardStatsWithdrawRepository repository, 
-                                      CardStatsWithdrawByCardRepository byCardRepository,
-                                      RedisService redis,
-                                      TracingMetrics metrics) {
-    this.repository = repository;
-    this.byCardRepository = byCardRepository;
-    this.redis = redis;
-    this.metrics = metrics;
-  }
-
   @Override
-  public Future<ApiResponse<List<CardStats.MonthAmount>>> getMonthlyWithdrawAmount(int year) {
+  public Future<List<CardStats.MonthAmount>> getMonthlyWithdrawAmount(int year) {
     var ctx = metrics.startSpan("CardStatsWithdrawService.getMonthlyWithdrawAmount");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
     String cacheKey = "stats:withdraw:monthly:" + year;
 
-    return redis.getJsonList(cacheKey, CardStats.MonthAmount.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) return Future.succeededFuture(cached);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.MonthAmount>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("card_stats.cache_hit", false);
           return repository.getMonthlyWithdrawAmount(year)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Monthly withdraw amount retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyWithdrawAmount", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyWithdrawAmount", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<List<CardStats.YearAmount>>> getYearlyWithdrawAmount(int endYear) {
+  public Future<List<CardStats.YearAmount>> getYearlyWithdrawAmount(int endYear) {
     var ctx = metrics.startSpan("CardStatsWithdrawService.getYearlyWithdrawAmount");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
     String cacheKey = "stats:withdraw:yearly:" + endYear;
 
-    return redis.getJsonList(cacheKey, CardStats.YearAmount.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) return Future.succeededFuture(cached);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.YearAmount>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("card_stats.cache_hit", false);
           return repository.getYearlyWithdrawAmount(endYear)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Yearly withdraw amount retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyWithdrawAmount", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyWithdrawAmount", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<List<CardStats.MonthAmount>>> getMonthlyWithdrawAmountByCardNumber(int year, String cardNum) {
+  public Future<List<CardStats.MonthAmount>> getMonthlyWithdrawAmountByCardNumber(MonthYearCardNumberCard req) {
     var ctx = metrics.startSpan("CardStatsWithdrawService.getMonthlyWithdrawAmountByCardNumber");
-    String cacheKey = "stats:withdraw:monthly:" + year + ":" + cardNum;
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = "stats:withdraw:monthly:" + req.getYear() + ":" + req.getCardNumber();
 
-    return redis.getJsonList(cacheKey, CardStats.MonthAmount.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) return Future.succeededFuture(cached);
-          return byCardRepository.getMonthlyWithdrawAmountByCardNumber(year, cardNum)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.MonthAmount>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("card_stats.cache_hit", false);
+          return byCardRepository.getMonthlyWithdrawAmountByCardNumber(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Monthly withdraw amount by card retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyWithdrawAmountByCardNumber", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyWithdrawAmountByCardNumber", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<List<CardStats.YearAmount>>> getYearlyWithdrawAmountByCardNumber(int endYear, String cardNum) {
+  public Future<List<CardStats.YearAmount>> getYearlyWithdrawAmountByCardNumber(MonthYearCardNumberCard req) {
     var ctx = metrics.startSpan("CardStatsWithdrawService.getYearlyWithdrawAmountByCardNumber");
-    String cacheKey = "stats:withdraw:yearly:" + endYear + ":" + cardNum;
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = "stats:withdraw:yearly:" + req.getYear() + ":" + req.getCardNumber();
 
-    return redis.getJsonList(cacheKey, CardStats.YearAmount.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) return Future.succeededFuture(cached);
-          return byCardRepository.getYearlyWithdrawAmountByCardNumber(endYear, cardNum)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.YearAmount>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("card_stats.cache_hit", false);
+          return byCardRepository.getYearlyWithdrawAmountByCardNumber(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Yearly withdraw amount by card retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyWithdrawAmountByCardNumber", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyWithdrawAmountByCardNumber", e.getMessage()));
   }

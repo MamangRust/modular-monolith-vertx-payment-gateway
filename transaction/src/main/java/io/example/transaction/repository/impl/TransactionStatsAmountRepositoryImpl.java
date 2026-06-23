@@ -4,29 +4,27 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+
+import io.example.transaction.domain.requests.YearCardNumberTransactionRequest;
+import io.example.transaction.domain.requests.YearTransactionRequest;
 import io.example.transaction.model.TransactionStats;
 import io.example.transaction.repository.TransactionStatsAmountRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
-import pb.transaction.Transaction.FindYearTransactionStatus;
-import pb.transaction.Transaction.FindByYearCardNumberTransactionRequest;
-
+@RequiredArgsConstructor
 public class TransactionStatsAmountRepositoryImpl implements TransactionStatsAmountRepository {
   private final Pool pool;
-
-  public TransactionStatsAmountRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
   }
 
   @Override
-  public Future<List<TransactionStats.MonthAmount>> getMonthlyAmounts(FindYearTransactionStatus request) {
+  public Future<List<TransactionStats.MonthAmount>> getMonthlyAmounts(YearTransactionRequest request) {
     String sql = """
         WITH months AS (
             SELECT generate_series(
@@ -48,13 +46,14 @@ public class TransactionStatsAmountRepositoryImpl implements TransactionStatsAmo
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart((int) request.getYear())))
         .map(rows -> {
           List<TransactionStats.MonthAmount> l = new ArrayList<>();
-          for (Row r : rows) l.add(TransactionStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            l.add(TransactionStats.MonthAmount.fromRow(r));
           return l;
         });
   }
 
   @Override
-  public Future<List<TransactionStats.YearAmount>> getYearlyAmounts(FindYearTransactionStatus request) {
+  public Future<List<TransactionStats.YearAmount>> getYearlyAmounts(YearTransactionRequest request) {
     int endYear = (int) request.getYear();
     String sql = """
         SELECT
@@ -70,13 +69,15 @@ public class TransactionStatsAmountRepositoryImpl implements TransactionStatsAmo
     return pool.preparedQuery(sql).execute(Tuple.of(endYear))
         .map(rows -> {
           List<TransactionStats.YearAmount> l = new ArrayList<>();
-          for (Row r : rows) l.add(TransactionStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            l.add(TransactionStats.YearAmount.fromRow(r));
           return l;
         });
   }
 
   @Override
-  public Future<List<TransactionStats.MonthAmount>> getMonthlyAmountsByCard(FindByYearCardNumberTransactionRequest request) {
+  public Future<List<TransactionStats.MonthAmount>> getMonthlyAmountsByCard(
+      YearCardNumberTransactionRequest request) {
     String sql = """
         WITH months AS (
             SELECT generate_series(
@@ -99,13 +100,15 @@ public class TransactionStatsAmountRepositoryImpl implements TransactionStatsAmo
     return pool.preparedQuery(sql).execute(Tuple.of(request.getCardNumber(), getYearStart((int) request.getYear())))
         .map(rows -> {
           List<TransactionStats.MonthAmount> l = new ArrayList<>();
-          for (Row r : rows) l.add(TransactionStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            l.add(TransactionStats.MonthAmount.fromRow(r));
           return l;
         });
   }
 
   @Override
-  public Future<List<TransactionStats.YearAmount>> getYearlyAmountsByCard(FindByYearCardNumberTransactionRequest request) {
+  public Future<List<TransactionStats.YearAmount>> getYearlyAmountsByCard(
+      YearCardNumberTransactionRequest request) {
     int endYear = (int) request.getYear();
     String sql = """
         SELECT
@@ -122,7 +125,8 @@ public class TransactionStatsAmountRepositoryImpl implements TransactionStatsAmo
     return pool.preparedQuery(sql).execute(Tuple.of(request.getCardNumber(), endYear))
         .map(rows -> {
           List<TransactionStats.YearAmount> l = new ArrayList<>();
-          for (Row r : rows) l.add(TransactionStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            l.add(TransactionStats.YearAmount.fromRow(r));
           return l;
         });
   }

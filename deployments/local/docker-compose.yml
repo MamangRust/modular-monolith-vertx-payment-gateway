@@ -412,6 +412,27 @@ services:
     networks:
       - app_network
 
+  db-migration:
+    build:
+      context: ./db-migration
+      dockerfile: Dockerfile
+    image: monolith-payment-gateway-grpc-vertx/db-migration:latest
+    container_name: db-migration
+    env_file: ./docker.env
+    volumes:
+      - ./docker.env:/app/docker.env
+    networks:
+      - app_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=DRAGON
+      - DB_PASSWORD=DRAGON
+      - DB_NAME=PAYMENT_GATEWAY
+
   apigateway:
     build:
       context: ./apigateway
@@ -484,6 +505,8 @@ services:
         condition: service_started
       redis-cluster-init:
         condition: service_completed_successfully
+      db-migration:
+        condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_AUTH}
       - REDIS_PORT=${REDIS_PORT_AUTH}
@@ -514,6 +537,8 @@ services:
       otel-collector:
         condition: service_started
       redis-cluster-init:
+        condition: service_completed_successfully
+      db-migration:
         condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_MERCHANT}
@@ -546,6 +571,8 @@ services:
         condition: service_started
       redis-cluster-init:
         condition: service_completed_successfully
+      db-migration:
+        condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_CARD}
       - REDIS_PORT=${REDIS_PORT_CARD}
@@ -576,6 +603,8 @@ services:
       otel-collector:
         condition: service_started
       redis-cluster-init:
+        condition: service_completed_successfully
+      db-migration:
         condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_SALDO}
@@ -608,6 +637,8 @@ services:
         condition: service_started
       redis-cluster-init:
         condition: service_completed_successfully
+      db-migration:
+        condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_ROLE}
       - REDIS_PORT=${REDIS_PORT_ROLE}
@@ -638,6 +669,8 @@ services:
       otel-collector:
         condition: service_started
       redis-cluster-init:
+        condition: service_completed_successfully
+      db-migration:
         condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_TOPUP}
@@ -670,6 +703,8 @@ services:
         condition: service_started
       redis-cluster-init:
         condition: service_completed_successfully
+      db-migration:
+        condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_TRANSACTION}
       - REDIS_PORT=${REDIS_PORT_TRANSACTION}
@@ -701,6 +736,8 @@ services:
         condition: service_started
       redis-cluster-init:
         condition: service_completed_successfully
+      db-migration:
+        condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_TRANSFER}
       - REDIS_PORT=${REDIS_PORT_TRANSFER}
@@ -731,6 +768,8 @@ services:
       otel-collector:
         condition: service_started
       redis-cluster-init:
+        condition: service_completed_successfully
+      db-migration:
         condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_USER}
@@ -787,6 +826,8 @@ services:
       otel-collector:
         condition: service_started
       redis-cluster-init:
+        condition: service_completed_successfully
+      db-migration:
         condition: service_completed_successfully
     environment:
       - REDIS_HOST=${REDIS_HOST_WITHDRAW}

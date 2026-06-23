@@ -1,101 +1,128 @@
 package io.example.card.service.impl;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.example.card.domain.requests.MonthYearCardNumberCard;
 import io.example.card.model.CardStats;
 import io.example.card.repository.CardStatsBalanceByCardRepository;
 import io.example.card.repository.CardStatsBalanceRepository;
 import io.example.card.service.CardStatsBalanceService;
-import io.example.common.domain.ApiResponse;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import java.time.Duration;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class CardStatsBalanceServiceImpl implements CardStatsBalanceService {
   private final CardStatsBalanceRepository repository;
   private final CardStatsBalanceByCardRepository byCardRepository;
   private final RedisService redis;
   private final TracingMetrics metrics;
+  private static final ObjectMapper mapper = new ObjectMapper();
   private static final Duration CACHE_TTL = Duration.ofMinutes(15);
 
-  public CardStatsBalanceServiceImpl(CardStatsBalanceRepository repository, 
-                                     CardStatsBalanceByCardRepository byCardRepository,
-                                     RedisService redis,
-                                     TracingMetrics metrics) {
-    this.repository = repository;
-    this.byCardRepository = byCardRepository;
-    this.redis = redis;
-    this.metrics = metrics;
-  }
-
   @Override
-  public Future<ApiResponse<List<CardStats.MonthBalance>>> getMonthlyBalances(int year) {
+  public Future<List<CardStats.MonthBalance>> getMonthlyBalances(int year) {
     var ctx = metrics.startSpan("CardStatsBalanceService.getMonthlyBalances");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
     String cacheKey = "stats:balance:monthly:" + year;
 
-    return redis.getJsonList(cacheKey, CardStats.MonthBalance.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            return Future.succeededFuture(cached);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.MonthBalance>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
+          span.setAttribute("card_stats.cache_hit", false);
           return repository.getMonthlyBalances(year)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Monthly balances retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyBalances", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyBalances", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<List<CardStats.YearlyBalance>>> getYearlyBalances(int endYear) {
+  public Future<List<CardStats.YearlyBalance>> getYearlyBalances(int endYear) {
     var ctx = metrics.startSpan("CardStatsBalanceService.getYearlyBalances");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
     String cacheKey = "stats:balance:yearly:" + endYear;
 
-    return redis.getJsonList(cacheKey, CardStats.YearlyBalance.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            return Future.succeededFuture(cached);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.YearlyBalance>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
+          span.setAttribute("card_stats.cache_hit", false);
           return repository.getYearlyBalances(endYear)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Yearly balances retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyBalances", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyBalances", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<List<CardStats.MonthBalance>>> getMonthlyBalancesByCardNumber(int year, String cardNum) {
+  public Future<List<CardStats.MonthBalance>> getMonthlyBalancesByCardNumber(MonthYearCardNumberCard req) {
     var ctx = metrics.startSpan("CardStatsBalanceService.getMonthlyBalancesByCardNumber");
-    String cacheKey = "stats:balance:monthly:" + year + ":" + cardNum;
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = "stats:balance:monthly:" + req.getYear() + ":" + req.getCardNumber();
 
-    return redis.getJsonList(cacheKey, CardStats.MonthBalance.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            return Future.succeededFuture(cached);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.MonthBalance>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
-          return byCardRepository.getMonthlyBalancesByCardNumber(year, cardNum)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+          span.setAttribute("card_stats.cache_hit", false);
+          return byCardRepository.getMonthlyBalancesByCardNumber(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Monthly balances by card retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyBalancesByCardNumber", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyBalancesByCardNumber", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<List<CardStats.YearlyBalance>>> getYearlyBalancesByCardNumber(int endYear, String cardNum) {
+  public Future<List<CardStats.YearlyBalance>> getYearlyBalancesByCardNumber(MonthYearCardNumberCard req) {
     var ctx = metrics.startSpan("CardStatsBalanceService.getYearlyBalancesByCardNumber");
-    String cacheKey = "stats:balance:yearly:" + endYear + ":" + cardNum;
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = "stats:balance:yearly:" + req.getYear() + ":" + req.getCardNumber();
 
-    return redis.getJsonList(cacheKey, CardStats.YearlyBalance.class)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            return Future.succeededFuture(cached);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<CardStats.YearlyBalance>>() {
+              });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
-          return byCardRepository.getYearlyBalancesByCardNumber(endYear, cardNum)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+          span.setAttribute("card_stats.cache_hit", false);
+          return byCardRepository.getYearlyBalancesByCardNumber(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
-        .map(res -> ApiResponse.success("Yearly balances by card retrieved successfully", res))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyBalancesByCardNumber", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyBalancesByCardNumber", e.getMessage()));
   }

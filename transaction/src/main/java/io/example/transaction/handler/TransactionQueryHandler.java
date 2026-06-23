@@ -1,12 +1,13 @@
 package io.example.transaction.handler;
 
-import io.example.common.model.PaginationMeta;
+import io.example.common.domain.PaginationMeta;
 import io.example.transaction.service.TransactionQueryService;
 import io.vertx.core.Future;
 import pb.transaction.Transaction.*;
 import pb.transaction.TransactionQuery.*;
 
-public class TransactionQueryHandler implements pb.transaction.VertxTransactionQueryServiceGrpcServer.TransactionQueryServiceApi {
+public class TransactionQueryHandler
+    implements pb.transaction.VertxTransactionQueryServiceGrpcServer.TransactionQueryServiceApi {
   private final TransactionQueryService service;
 
   public TransactionQueryHandler(TransactionQueryService service) {
@@ -14,7 +15,8 @@ public class TransactionQueryHandler implements pb.transaction.VertxTransactionQ
   }
 
   private pb.common.PaginationMeta toMeta(PaginationMeta meta) {
-    if (meta == null) return pb.common.PaginationMeta.getDefaultInstance();
+    if (meta == null)
+      return pb.common.PaginationMeta.getDefaultInstance();
     return pb.common.PaginationMeta.newBuilder()
         .setCurrentPage(meta.currentPage())
         .setPageSize(meta.pageSize())
@@ -35,7 +37,8 @@ public class TransactionQueryHandler implements pb.transaction.VertxTransactionQ
   }
 
   @Override
-  public Future<ApiResponsePaginationTransaction> findAllTransactionByCardNumber(FindAllTransactionCardNumberRequest req) {
+  public Future<ApiResponsePaginationTransaction> findAllTransactionByCardNumber(
+      FindAllTransactionCardNumberRequest req) {
     return service.getTransactionsByCardNumber(req)
         .map(resp -> ApiResponsePaginationTransaction.newBuilder()
             .setStatus(resp.status())
@@ -63,13 +66,13 @@ public class TransactionQueryHandler implements pb.transaction.VertxTransactionQ
   public Future<ApiResponseTransactions> findTransactionByMerchantId(FindTransactionByMerchantIdRequest req) {
     return service.getTransactionsByMerchantId(req.getMerchantId())
         .map(resp -> {
-            var builder = ApiResponseTransactions.newBuilder()
-                .setStatus(resp.status())
-                .setMessage(resp.message());
-            if (resp.data() != null) {
-                builder.addAllData(resp.data().stream().map(ProtoConverter::fromTransactionResponse).toList());
-            }
-            return builder.build();
+          var builder = ApiResponseTransactions.newBuilder()
+              .setStatus(resp.status())
+              .setMessage(resp.message());
+          if (resp.data() != null) {
+            builder.addAllData(resp.data().stream().map(ProtoConverter::fromTransactionResponse).toList());
+          }
+          return builder.build();
         });
   }
 

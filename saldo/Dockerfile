@@ -17,14 +17,17 @@ COPY transaction/pom.xml transaction/
 COPY transfer/pom.xml transfer/
 COPY user/pom.xml user/
 COPY withdraw/pom.xml withdraw/
+COPY db-migration/pom.xml db-migration/
 COPY common/src common/src
 COPY saldo/src saldo/src
+COPY chaos.yaml chaos.yaml
 
-RUN mvn clean package -pl saldo -am -DskipTests -q
+RUN --mount=type=cache,target=/root/.m2 mvn clean package -pl saldo -am -DskipTests -q -Dmaven.wagon.http.retryHandler.count=5
 
 # ---- Runtime Stage ----
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=build /app/saldo/target/saldo-*-fat.jar app.jar
+COPY chaos.yaml .
 EXPOSE 50056
 ENTRYPOINT ["java", "-jar", "app.jar"]

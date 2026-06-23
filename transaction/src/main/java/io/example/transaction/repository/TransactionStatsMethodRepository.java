@@ -4,12 +4,15 @@ import java.util.List;
 import io.example.transaction.model.TransactionStats;
 import io.vertx.core.Future;
 
-import pb.transaction.Transaction.FindYearTransactionStatus;
-import pb.transaction.Transaction.FindByYearCardNumberTransactionRequest;
+import io.example.transaction.domain.requests.YearCardNumberTransactionRequest;
+import io.example.transaction.domain.requests.YearTransactionRequest;
 
 public interface TransactionStatsMethodRepository {
-  Future<List<TransactionStats.MonthMethod>> getMonthlyMethods(FindYearTransactionStatus request);
-  Future<List<TransactionStats.YearMethod>> getYearlyMethods(FindYearTransactionStatus request);
-  Future<List<TransactionStats.MonthMethod>> getMonthlyMethodsByCard(FindByYearCardNumberTransactionRequest request);
-  Future<List<TransactionStats.YearMethod>> getYearlyMethodsByCard(FindByYearCardNumberTransactionRequest request);
+  Future<List<TransactionStats.MonthMethod>> getMonthlyMethods(YearTransactionRequest request);
+
+  Future<List<TransactionStats.YearMethod>> getYearlyMethods(YearTransactionRequest request);
+
+  Future<List<TransactionStats.MonthMethod>> getMonthlyMethodsByCard(YearCardNumberTransactionRequest request);
+
+  Future<List<TransactionStats.YearMethod>> getYearlyMethodsByCard(YearCardNumberTransactionRequest request);
 }

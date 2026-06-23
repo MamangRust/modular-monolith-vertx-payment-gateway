@@ -7,13 +7,11 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransferCommandRepositoryImpl implements TransferCommandRepository {
   private final Pool pool;
-
-  public TransferCommandRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   @Override
   public Future<Transfer> createTransfer(String from, String to, long amount) {
@@ -58,19 +56,25 @@ public class TransferCommandRepositoryImpl implements TransferCommandRepository 
     return pool.preparedQuery(sql).execute(Tuple.of(id)).map(this::mapSingleOrNull);
   }
 
-  @Override
-  public Future<Void> deleteTransferPermanently(int id) {
-    return pool.preparedQuery("DELETE FROM transfers WHERE transfer_id = $1").execute(Tuple.of(id)).mapEmpty();
+  public Future<Boolean> deleteTransferPermanently(int transferId) {
+    return pool
+        .preparedQuery("DELETE FROM transfers WHERE transfer_id = $1 AND deleted_at IS NOT NULL")
+        .execute(Tuple.of(transferId))
+        .map(rowSet -> rowSet.rowCount() > 0);
   }
 
-  @Override
-  public Future<Void> restoreAllTransfers() {
-    return pool.query("UPDATE transfers SET deleted_at = NULL WHERE deleted_at IS NOT NULL").execute().mapEmpty();
+  public Future<Integer> restoreAllTransfers() {
+    return pool
+        .query("UPDATE transfers SET deleted_at = NULL WHERE deleted_at IS NOT NULL")
+        .execute()
+        .map(RowSet::rowCount);
   }
 
-  @Override
-  public Future<Void> deleteAllPermanentTransfers() {
-    return pool.query("DELETE FROM transfers WHERE deleted_at IS NOT NULL").execute().mapEmpty();
+  public Future<Integer> deleteAllPermanentTransfers() {
+    return pool
+        .query("DELETE FROM transfers WHERE deleted_at IS NOT NULL")
+        .execute()
+        .map(RowSet::rowCount);
   }
 
   private Transfer mapSingleOrNull(RowSet<Row> rows) {

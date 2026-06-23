@@ -1,22 +1,25 @@
 package io.example.withdraw.repository;
 
+import io.example.withdraw.domain.requests.CreateWithdrawRequest;
+import io.example.withdraw.domain.requests.UpdateWithdrawRequest;
+import io.example.withdraw.domain.requests.UpdateWithdrawStatus;
 import io.example.withdraw.model.Withdraw;
 import io.vertx.core.Future;
 
 public interface WithdrawCommandRepository {
-  Future<Withdraw> createWithdraw(String card, long amount);
+  Future<Withdraw> createWithdraw(CreateWithdrawRequest req);
 
-  Future<Withdraw> updateWithdraw(int id, String card, long amount);
+  Future<Withdraw> updateWithdraw(UpdateWithdrawRequest req);
 
-  Future<Withdraw> updateWithdrawStatus(int id, String status);
+  Future<Withdraw> updateWithdrawStatus(UpdateWithdrawStatus req);
 
-  Future<Withdraw> trashWithdraw(int id);
+  Future<Withdraw> trashWithdraw(Integer id);
 
-  Future<Withdraw> restoreWithdraw(int id);
+  Future<Withdraw> restoreWithdraw(Integer id);
 
-  Future<Void> deleteWithdrawPermanently(int id);
+  Future<Boolean> deleteWithdrawPermanently(Integer id);
 
-  Future<Void> restoreAllWithdraws();
+  Future<Integer> restoreAllWithdraws();
 
-  Future<Void> deleteAllPermanentWithdraws();
+  Future<Integer> deleteAllPermanentWithdraws();
 }

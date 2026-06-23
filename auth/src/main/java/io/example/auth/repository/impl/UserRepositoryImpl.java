@@ -1,17 +1,16 @@
 package io.example.auth.repository.impl;
 
+import io.example.auth.domain.requests.CreateUserRequest;
 import io.example.auth.model.AuthUser;
 import io.example.auth.repository.UserRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class UserRepositoryImpl implements UserRepository {
     private final Pool pool;
-
-    public UserRepositoryImpl(Pool pool) {
-        this.pool = pool;
-    }
 
     @Override
     public Future<AuthUser> findByEmail(String email) {
@@ -35,13 +34,20 @@ public class UserRepositoryImpl implements UserRepository {
     }
 
     @Override
-    public Future<AuthUser> createUser(String firstName, String lastName, String email, String password, String verificationCode) {
-        return pool.preparedQuery("""
-                INSERT INTO users (firstname, lastname, email, password, verification_code, is_verified, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING *
-                """)
-                .execute(Tuple.of(firstName, lastName, email, password, verificationCode))
+    public Future<AuthUser> createUser(CreateUserRequest request) {
+        return pool
+                .preparedQuery(
+                        """
+                                INSERT INTO users (firstname, lastname, email, password, verification_code, is_verified, created_at, updated_at)
+                                VALUES ($1, $2, $3, $4, $5, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                                RETURNING *
+                                """)
+                .execute(Tuple.of(
+                        request.getFirstName(),
+                        request.getLastName(),
+                        request.getEmail(),
+                        request.getPassword(),
+                        request.getVerificationCode()))
                 .map(rows -> AuthUser.fromRow(rows.iterator().next()));
     }
 

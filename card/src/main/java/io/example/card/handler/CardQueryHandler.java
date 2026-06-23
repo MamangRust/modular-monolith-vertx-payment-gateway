@@ -1,117 +1,109 @@
 package io.example.card.handler;
 
+import io.example.common.grpc.GrpcExceptionMapper;
 import io.example.card.service.CardQueryService;
-import io.example.common.domain.PaginationMeta;
 import io.vertx.core.Future;
-import pb.card.Card.ApiResponseCard;
-import pb.card.Card.CardWithEmailResponse;
+import lombok.RequiredArgsConstructor;
 import pb.card.Card.FindAllCardRequest;
 import pb.card.Card.FindByCardNumberRequest;
 import pb.card.Card.FindByIdCardRequest;
 import pb.card.Card.FindByUserIdCardRequest;
-import pb.card.CardQuery.ApiResponsePaginationCard;
-import pb.card.CardQuery.ApiResponsePaginationCardDeleteAt;
 
+@RequiredArgsConstructor
 public class CardQueryHandler implements pb.card.VertxCardQueryServiceGrpcServer.CardQueryServiceApi {
   private final CardQueryService service;
 
-  public CardQueryHandler(CardQueryService service) {
-    this.service = service;
-  }
-
-  private pb.common.PaginationMeta toMeta(PaginationMeta meta) {
-    if (meta == null)
-      return pb.common.PaginationMeta.getDefaultInstance();
+  private pb.common.PaginationMeta buildPaginationMeta(int page, int pageSize, int totalRecords) {
+    int safePage = page > 0 ? page : 1;
+    int safePageSize = pageSize > 0 ? pageSize : 10;
+    int totalPages = (int) Math.ceil((double) totalRecords / safePageSize);
     return pb.common.PaginationMeta.newBuilder()
-        .setCurrentPage(meta.currentPage())
-        .setPageSize(meta.pageSize())
-        .setTotalPages(meta.totalPages())
-        .setTotalRecords(meta.totalRecords())
+        .setCurrentPage(safePage)
+        .setPageSize(safePageSize)
+        .setTotalPages(totalPages)
+        .setTotalRecords(totalRecords)
         .build();
   }
 
   @Override
-  public Future<ApiResponsePaginationCard> findAllCard(FindAllCardRequest req) {
+  public Future<pb.card.CardQuery.ApiResponsePaginationCard> findAllCard(FindAllCardRequest req) {
     return service.getCards(req)
-        .map(res -> ApiResponsePaginationCard.newBuilder()
-            .setStatus(res.status())
-            .setMessage(res.message())
-            .addAllData(res.data().stream().map(ProtoConverter::toResponse).toList())
-            .setPaginationMeta(toMeta(res.pagination()))
-            .build());
-  }
-
-  @Override
-  public Future<ApiResponseCard> findByIdCard(FindByIdCardRequest req) {
-    return service.getCardById(req)
         .map(resp -> {
-          var builder = ApiResponseCard.newBuilder()
-              .setStatus(resp.status())
-              .setMessage(resp.message());
-          if (resp.data() != null) {
-            builder.setData(ProtoConverter.toResponse(resp.data()));
-          }
+          var builder = pb.card.CardQuery.ApiResponsePaginationCard.newBuilder()
+              .setStatus("success")
+              .setMessage("OK")
+              .setPaginationMeta(buildPaginationMeta(req.getPage(), req.getPageSize(), resp.getTotalRecords()));
+          resp.getData().stream().map(ProtoConverter::toResponse).forEach(builder::addData);
           return builder.build();
-        });
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<ApiResponseCard> findByUserIdCard(FindByUserIdCardRequest req) {
-    return service.getCardByUserId(req)
-        .map(resp -> {
-          var builder = ApiResponseCard.newBuilder()
-              .setStatus(resp.status())
-              .setMessage(resp.message());
-          if (resp.data() != null) {
-            builder.setData(ProtoConverter.toResponse(resp.data()));
-          }
-          return builder.build();
-        });
+  public Future<pb.card.Card.ApiResponseCard> findByIdCard(FindByIdCardRequest req) {
+    return service.getCardById(req.getCardId())
+        .map(data -> pb.card.Card.ApiResponseCard.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.toResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<ApiResponsePaginationCardDeleteAt> findByActiveCard(FindAllCardRequest req) {
+  public Future<pb.card.Card.ApiResponseCard> findByUserIdCard(FindByUserIdCardRequest req) {
+    return service.getCardByUserId(req.getUserId())
+        .map(data -> pb.card.Card.ApiResponseCard.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.toResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
+  }
+
+  @Override
+  public Future<pb.card.CardQuery.ApiResponsePaginationCardDeleteAt> findByActiveCard(FindAllCardRequest req) {
     return service.getActiveCards(req)
-        .map(res -> ApiResponsePaginationCardDeleteAt.newBuilder()
-            .setStatus(res.status())
-            .setMessage(res.message())
-            .addAllData(res.data().stream().map(ProtoConverter::toResponseDeleted).toList())
-            .setPaginationMeta(toMeta(res.pagination()))
-            .build());
-  }
-
-  @Override
-  public Future<ApiResponsePaginationCardDeleteAt> findByTrashedCard(FindAllCardRequest req) {
-    return service.getTrashedCards(req)
-        .map(res -> ApiResponsePaginationCardDeleteAt.newBuilder()
-            .setStatus(res.status())
-            .setMessage(res.message())
-            .addAllData(res.data().stream().map(ProtoConverter::toResponseDeleted).toList())
-            .setPaginationMeta(toMeta(res.pagination()))
-            .build());
-  }
-
-  @Override
-  public Future<ApiResponseCard> findByCardNumber(FindByCardNumberRequest req) {
-    return service.getCardByCardNumber(req)
         .map(resp -> {
-          var builder = ApiResponseCard.newBuilder()
-              .setStatus(resp.status())
-              .setMessage(resp.message());
-          if (resp.data() != null) {
-            builder.setData(ProtoConverter.toResponse(resp.data()));
-          }
+          var builder = pb.card.CardQuery.ApiResponsePaginationCardDeleteAt.newBuilder()
+              .setStatus("success")
+              .setMessage("OK")
+              .setPaginationMeta(buildPaginationMeta(req.getPage(), req.getPageSize(), resp.getTotalRecords()));
+          resp.getData().stream().map(ProtoConverter::toResponseDeleted).forEach(builder::addData);
           return builder.build();
-        });
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<CardWithEmailResponse> findUserCardByCardNumber(FindByCardNumberRequest req) {
+  public Future<pb.card.CardQuery.ApiResponsePaginationCardDeleteAt> findByTrashedCard(FindAllCardRequest req) {
+    return service.getTrashedCards(req)
+        .map(resp -> {
+          var builder = pb.card.CardQuery.ApiResponsePaginationCardDeleteAt.newBuilder()
+              .setStatus("success")
+              .setMessage("OK")
+              .setPaginationMeta(buildPaginationMeta(req.getPage(), req.getPageSize(), resp.getTotalRecords()));
+          resp.getData().stream().map(ProtoConverter::toResponseDeleted).forEach(builder::addData);
+          return builder.build();
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
+  }
+
+  @Override
+  public Future<pb.card.Card.ApiResponseCard> findByCardNumber(FindByCardNumberRequest req) {
+    return service.getCardByCardNumber(req.getCardNumber())
+        .map(data -> pb.card.Card.ApiResponseCard.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.toResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
+  }
+
+  @Override
+  public Future<pb.card.Card.CardWithEmailResponse> findUserCardByCardNumber(FindByCardNumberRequest req) {
     return service.getCardEmailByCardNumber(req.getCardNumber())
-        .map(record -> {
-          if (record == null)
-            return CardWithEmailResponse.getDefaultInstance();
-          return ProtoConverter.toEmailResponse(record);
-        });
+        .map(ProtoConverter::toEmailResponse)
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 }

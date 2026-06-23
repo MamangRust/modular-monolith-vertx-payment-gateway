@@ -3,6 +3,7 @@ package io.example.role.repository.impl;
 import java.util.ArrayList;
 import java.util.List;
 import io.example.common.domain.PagedResult;
+import io.example.role.domain.requests.FindAllRoles;
 import io.example.role.model.Role;
 import io.example.role.repository.RoleQueryRepository;
 import io.vertx.core.Future;
@@ -10,16 +11,16 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class RoleQueryRepositoryImpl implements RoleQueryRepository {
   private final Pool client;
 
-  public RoleQueryRepositoryImpl(Pool client) {
-    this.client = client;
-  }
-
   @Override
-  public Future<PagedResult<Role>> getRoles(String search, int page, int pageSize) {
+  public Future<PagedResult<Role>> getRoles(FindAllRoles request) {
+    int page = request.getPage();
+    int pageSize = request.getPageSize();
     int offset = (page > 0 ? page - 1 : 0) * pageSize;
     return client
         .preparedQuery("""
@@ -28,12 +29,14 @@ public class RoleQueryRepositoryImpl implements RoleQueryRepository {
             WHERE ($1::TEXT IS NULL OR role_name ILIKE '%' || $1 || '%')
             ORDER BY created_at ASC LIMIT $2 OFFSET $3
             """)
-        .execute(Tuple.of(normalizeSearch(search), pageSize, offset))
+        .execute(Tuple.of(normalizeSearch(request.getSearch()), pageSize, offset))
         .map(this::mapPagedRoles);
   }
 
   @Override
-  public Future<PagedResult<Role>> getActiveRoles(String search, int page, int pageSize) {
+  public Future<PagedResult<Role>> getActiveRoles(FindAllRoles request) {
+    int page = request.getPage();
+    int pageSize = request.getPageSize();
     int offset = (page > 0 ? page - 1 : 0) * pageSize;
     return client
         .preparedQuery("""
@@ -42,12 +45,14 @@ public class RoleQueryRepositoryImpl implements RoleQueryRepository {
             WHERE deleted_at IS NULL AND ($1::TEXT IS NULL OR role_name ILIKE '%' || $1 || '%')
             ORDER BY created_at ASC LIMIT $2 OFFSET $3
             """)
-        .execute(Tuple.of(normalizeSearch(search), pageSize, offset))
+        .execute(Tuple.of(normalizeSearch(request.getSearch()), pageSize, offset))
         .map(this::mapPagedRoles);
   }
 
   @Override
-  public Future<PagedResult<Role>> getTrashedRoles(String search, int page, int pageSize) {
+  public Future<PagedResult<Role>> getTrashedRoles(FindAllRoles request) {
+    int page = request.getPage();
+    int pageSize = request.getPageSize();
     int offset = (page > 0 ? page - 1 : 0) * pageSize;
     return client
         .preparedQuery("""
@@ -56,14 +61,15 @@ public class RoleQueryRepositoryImpl implements RoleQueryRepository {
             WHERE deleted_at IS NOT NULL AND ($1::TEXT IS NULL OR role_name ILIKE '%' || $1 || '%')
             ORDER BY deleted_at DESC LIMIT $2 OFFSET $3
             """)
-        .execute(Tuple.of(normalizeSearch(search), pageSize, offset))
+        .execute(Tuple.of(normalizeSearch(request.getSearch()), pageSize, offset))
         .map(this::mapPagedRoles);
   }
 
   @Override
   public Future<Role> getRoleById(Integer roleId) {
     return client
-        .preparedQuery("SELECT role_id, role_name, created_at, updated_at, deleted_at FROM roles WHERE role_id = $1 AND deleted_at IS NULL")
+        .preparedQuery(
+            "SELECT role_id, role_name, created_at, updated_at, deleted_at FROM roles WHERE role_id = $1 AND deleted_at IS NULL")
         .execute(Tuple.of(roleId))
         .map(this::mapSingleOrNull);
   }
@@ -71,8 +77,18 @@ public class RoleQueryRepositoryImpl implements RoleQueryRepository {
   @Override
   public Future<Role> getRoleByName(String roleName) {
     return client
-        .preparedQuery("SELECT role_id, role_name, created_at, updated_at, deleted_at FROM roles WHERE role_name = $1 AND deleted_at IS NULL")
+        .preparedQuery(
+            "SELECT role_id, role_name, created_at, updated_at, deleted_at FROM roles WHERE role_name = $1 AND deleted_at IS NULL")
         .execute(Tuple.of(roleName))
+        .map(this::mapSingleOrNull);
+  }
+
+  @Override
+  public Future<Role> findByTrashedId(Integer roleId) {
+    return client
+        .preparedQuery(
+            "SELECT role_id, role_name, created_at, updated_at, deleted_at FROM roles WHERE role_id = $1 AND deleted_at IS NOT NULL")
+        .execute(Tuple.of(roleId))
         .map(this::mapSingleOrNull);
   }
 
@@ -111,7 +127,8 @@ public class RoleQueryRepositoryImpl implements RoleQueryRepository {
       roles.add(Role.fromRow(row));
       if (total == 0) {
         Integer tc = row.getInteger("total_count");
-        if (tc != null) total = tc;
+        if (tc != null)
+          total = tc;
       }
     }
     return new PagedResult<>(roles, total);

@@ -1,67 +1,76 @@
 package io.example.merchant.service.impl;
 
-import java.util.List;
 import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.example.common.observability.TracingMetrics;
+import io.example.common.service.RedisService;
+import io.example.merchant.domain.requests.merchant.MonthYearTotalAmountApiKey;
 import io.example.merchant.model.MerchantStats;
 import io.example.merchant.repository.MerchantStatsTotalAmountByApiKeyRepository;
 import io.example.merchant.service.MerchantStatsTotalAmountByApiKeyService;
-import io.example.common.observability.TracingMetrics;
-import io.example.common.service.RedisService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsTotalAmountByApiKeyServiceImpl implements MerchantStatsTotalAmountByApiKeyService {
   private final MerchantStatsTotalAmountByApiKeyRepository repository;
   private final RedisService redisService;
   private final TracingMetrics metrics;
+  private static final ObjectMapper mapper = new ObjectMapper();
   private static final String CACHE_PREFIX = "stats:totalamount:apikey:";
-
-  public MerchantStatsTotalAmountByApiKeyServiceImpl(MerchantStatsTotalAmountByApiKeyRepository repository, RedisService redisService, TracingMetrics metrics) {
-    this.repository = repository;
-    this.redisService = redisService;
-    this.metrics = metrics;
-  }
+  private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
   @Override
-  public Future<List<MerchantStats.MonthAmount>> getMonthlyTotalAmounts(pb.merchant.Merchant.FindYearMerchantByApikey req) {
+  public Future<List<MerchantStats.MonthAmount>> getMonthlyTotalAmounts(MonthYearTotalAmountApiKey req) {
     var ctx = metrics.startSpan("MerchantStatsTotalAmountByApiKeyService.getMonthlyTotalAmounts");
-    String cacheKey = CACHE_PREFIX + "monthly:" + req.getApiKey() + ":" + req.getYear();
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = CACHE_PREFIX + "monthly:" + req.getApikey() + ":" + req.getYear();
 
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            List<MerchantStats.MonthAmount> list = new JsonArray(cached).stream()
-                .map(o -> MerchantStats.MonthAmount.fromJson((JsonObject) o)).toList();
-            return Future.succeededFuture(list);
-          }
-          return repository.getMonthlyTotalAmountByApikey(req)
-              .onSuccess(list -> {
-                JsonArray arr = new JsonArray(list.stream().map(MerchantStats.MonthAmount::toJson).toList());
-                redisService.setJson(cacheKey, arr, Duration.ofMinutes(10));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("merchant_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<MerchantStats.MonthAmount>>() {
               });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("merchant_stats.cache_hit", false);
+          return repository.getMonthlyTotalAmountByApikey(req)
+              .compose(res -> redisService.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTotalAmounts", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTotalAmounts", e.getMessage()));
   }
 
   @Override
-  public Future<List<MerchantStats.YearAmount>> getYearlyTotalAmounts(pb.merchant.Merchant.FindYearMerchantByApikey req) {
+  public Future<List<MerchantStats.YearAmount>> getYearlyTotalAmounts(MonthYearTotalAmountApiKey req) {
     var ctx = metrics.startSpan("MerchantStatsTotalAmountByApiKeyService.getYearlyTotalAmounts");
-    String cacheKey = CACHE_PREFIX + "yearly:" + req.getApiKey() + ":" + req.getYear();
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = CACHE_PREFIX + "yearly:" + req.getApikey() + ":" + req.getYear();
 
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            List<MerchantStats.YearAmount> list = new JsonArray(cached).stream()
-                .map(o -> MerchantStats.YearAmount.fromJson((JsonObject) o)).toList();
-            return Future.succeededFuture(list);
-          }
-          return repository.getYearlyTotalAmountByApikey(req)
-              .onSuccess(list -> {
-                JsonArray arr = new JsonArray(list.stream().map(MerchantStats.YearAmount::toJson).toList());
-                redisService.setJson(cacheKey, arr, Duration.ofMinutes(10));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("merchant_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<MerchantStats.YearAmount>>() {
               });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("merchant_stats.cache_hit", false);
+          return repository.getYearlyTotalAmountByApikey(req)
+              .compose(res -> redisService.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTotalAmounts", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTotalAmounts", e.getMessage()));

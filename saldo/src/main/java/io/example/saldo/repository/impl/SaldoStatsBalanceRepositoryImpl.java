@@ -11,13 +11,11 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class SaldoStatsBalanceRepositoryImpl implements SaldoStatsBalanceRepository {
   private final Pool client;
-
-  public SaldoStatsBalanceRepositoryImpl(Pool client) {
-    this.client = client;
-  }
 
   @Override
   public Future<List<SaldoStats.MonthBalance>> getMonthlySaldoBalances(Integer year) {

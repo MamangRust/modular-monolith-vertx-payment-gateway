@@ -1,5 +1,7 @@
 package io.example.user;
 
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -40,11 +42,11 @@ public class UserVerticle extends AbstractVerticle {
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8082)
         .put("service.name", "user-service");
@@ -89,9 +91,14 @@ public class UserVerticle extends AbstractVerticle {
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
-    
-    UserQueryRepository queryRepo = new UserQueryRepositoryImpl(pool);
-    UserCommandRepository cmdRepo = new UserCommandRepositoryImpl(pool);
+
+    // Dynamic database proxying for chaos injection
+    ChaosManager chaosManager = new ChaosManager();
+    chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    UserQueryRepository queryRepo = new UserQueryRepositoryImpl(chaosPool);
+    UserCommandRepository cmdRepo = new UserCommandRepositoryImpl(chaosPool);
 
     // 3. Initialize Caching
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
@@ -99,7 +106,7 @@ public class UserVerticle extends AbstractVerticle {
 
     // 4. Initialize Services
     UserQueryService queryService = new UserQueryServiceImpl(queryRepo, redisService, tracingMetrics);
-    UserCommandService cmdService = new UserCommandServiceImpl(cmdRepo, redisService, tracingMetrics);
+    UserCommandService cmdService = new UserCommandServiceImpl(cmdRepo, queryRepo, redisService, tracingMetrics);
 
     // 5. Initialize Handlers
     var queryHandler = new UserQueryHandler(queryService);

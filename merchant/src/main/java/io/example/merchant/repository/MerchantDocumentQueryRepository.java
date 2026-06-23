@@ -8,7 +8,9 @@ import pb.merchant_document.MerchantDocumentOuterClass.FindAllMerchantDocumentsR
 public interface MerchantDocumentQueryRepository {
   Future<PagedResult<MerchantDocument>> findAllDocuments(FindAllMerchantDocumentsRequest request);
 
-  Future<MerchantDocument> findByIdDocument(int id);
+  Future<MerchantDocument> findByIdDocument(Integer id);
+
+  Future<MerchantDocument> findByTrashedByIdDocument(Integer id);
 
   Future<PagedResult<MerchantDocument>> findByActiveDocuments(FindAllMerchantDocumentsRequest request);
 

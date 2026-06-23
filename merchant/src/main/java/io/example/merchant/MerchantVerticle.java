@@ -3,6 +3,10 @@ package io.example.merchant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -11,6 +15,8 @@ import io.example.common.service.KafkaService;
 import io.example.common.service.RedisService;
 import io.example.common.config.KafkaConfig;
 import io.example.merchant.repository.UserClientRepository;
+import io.vertx.core.Handler;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.kafka.client.producer.KafkaProducer;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.core.net.SocketAddress;
@@ -80,17 +86,18 @@ public class MerchantVerticle extends AbstractVerticle {
   private TelemetryConfig telemetryConfig;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
+  private ChaosManager chaosManager;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8086)
         .put("user_grpc_port", 8082)
@@ -137,47 +144,55 @@ public class MerchantVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
-    var queryRepo = new MerchantQueryRepositoryImpl(pool);
-    var cmdRepo = new MerchantCommandRepositoryImpl(pool);
-    var docQueryRepo = new MerchantDocumentQueryRepositoryImpl(pool);
-    var docCmdRepo = new MerchantDocumentCommandRepositoryImpl(pool);
-    var txnRepo = new MerchantTransactionRepositoryImpl(pool);
+    this.chaosManager = new ChaosManager();
+    this.chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    var queryRepo = new MerchantQueryRepositoryImpl(chaosPool);
+    var cmdRepo = new MerchantCommandRepositoryImpl(chaosPool);
+    var docQueryRepo = new MerchantDocumentQueryRepositoryImpl(chaosPool);
+    var docCmdRepo = new MerchantDocumentCommandRepositoryImpl(chaosPool);
+    var txnRepo = new MerchantTransactionRepositoryImpl(chaosPool);
 
     // Method Repos
-    var statsMethRepo = new MerchantStatsMethodRepositoryImpl(pool);
-    var statsMethApiKeyRepo = new MerchantStatsMethodByApiKeyRepositoryImpl(pool);
-    var statsMethMerchRepo = new MerchantStatsMethodByMerchantRepositoryImpl(pool);
+    var statsMethRepo = new MerchantStatsMethodRepositoryImpl(chaosPool);
+    var statsMethApiKeyRepo = new MerchantStatsMethodByApiKeyRepositoryImpl(chaosPool);
+    var statsMethMerchRepo = new MerchantStatsMethodByMerchantRepositoryImpl(chaosPool);
 
     // Amount Repos
-    var statsAmtRepo = new MerchantStatsAmountRepositoryImpl(pool);
-    var statsAmtApiKeyRepo = new MerchantStatsAmountByApiKeyRepositoryImpl(pool);
-    var statsAmtMerchRepo = new MerchantStatsAmountByMerchantRepositoryImpl(pool);
+    var statsAmtRepo = new MerchantStatsAmountRepositoryImpl(chaosPool);
+    var statsAmtApiKeyRepo = new MerchantStatsAmountByApiKeyRepositoryImpl(chaosPool);
+    var statsAmtMerchRepo = new MerchantStatsAmountByMerchantRepositoryImpl(chaosPool);
 
     // Total Amount Repos
-    var statsTotRepo = new MerchantStatsTotalAmountRepositoryImpl(pool);
-    var statsTotApiKeyRepo = new MerchantStatsTotalAmountByApiKeyRepositoryImpl(pool);
-    var statsTotMerchRepo = new MerchantStatsTotalAmountByMerchantRepositoryImpl(pool);
+    var statsTotRepo = new MerchantStatsTotalAmountRepositoryImpl(chaosPool);
+    var statsTotApiKeyRepo = new MerchantStatsTotalAmountByApiKeyRepositoryImpl(chaosPool);
+    var statsTotMerchRepo = new MerchantStatsTotalAmountByMerchantRepositoryImpl(chaosPool);
 
     // 3. Initialize Caching
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
 
-    // 4. Initialize Kafka
+    // 4. Initialize Kafka (with chaos interceptor)
     KafkaProducer<String, String> producer = KafkaConfig.createProducer(vertx);
-    this.kafkaService = new KafkaService(producer);
+    KafkaProducer<String, String> chaosProducer = ChaosKafkaInterceptor.wrap(producer, chaosManager, vertx);
+    this.kafkaService = new KafkaService(chaosProducer);
 
     // 5. Initialize gRPC Clients
     this.grpcClient = GrpcClient.client(vertx);
     String userHost = System.getenv().getOrDefault("USER_SERVICE_HOST", "user");
     int userPort = Integer.parseInt(System.getenv().getOrDefault("USER_SERVICE_PORT", "8083"));
-    var userClient = new VertxUserQueryServiceGrpcClient(grpcClient, SocketAddress.inetSocketAddress(userPort, userHost));
+    var userClient = new VertxUserQueryServiceGrpcClient(grpcClient,
+        SocketAddress.inetSocketAddress(userPort, userHost));
     var userClientRepo = new UserClientRepository(userClient);
 
     // 6. Initialize Services
     var queryService = new MerchantQueryServiceImpl(queryRepo, redisService, tracingMetrics);
-    var cmdService = new MerchantCommandServiceImpl(cmdRepo, queryRepo, userClientRepo, redisService, kafkaService, tracingMetrics);
+    var cmdService = new MerchantCommandServiceImpl(cmdRepo, queryRepo, userClientRepo, redisService, kafkaService,
+        tracingMetrics);
     var docQueryService = new MerchantDocumentQueryServiceImpl(docQueryRepo, redisService, tracingMetrics);
-    var docCmdService = new MerchantDocumentCommandServiceImpl(docCmdRepo, queryRepo, userClientRepo, redisService, kafkaService, tracingMetrics);
+    var docCmdService = new MerchantDocumentCommandServiceImpl(docCmdRepo, docQueryRepo, queryRepo, userClientRepo,
+        redisService, kafkaService, tracingMetrics);
 
     MerchantTransactionService txnService = new MerchantTransactionServiceImpl(txnRepo, redisService, tracingMetrics);
 
@@ -267,8 +282,11 @@ public class MerchantVerticle extends AbstractVerticle {
     statsMethHandler.bindAll(grpcServer);
     statsTotHandler.bindAll(grpcServer);
 
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

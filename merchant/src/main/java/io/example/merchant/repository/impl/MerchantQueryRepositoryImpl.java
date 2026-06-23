@@ -10,14 +10,12 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 import pb.merchant.Merchant.FindAllMerchantRequest;
 
+@RequiredArgsConstructor
 public class MerchantQueryRepositoryImpl implements MerchantQueryRepository {
   private final Pool pool;
-
-  public MerchantQueryRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String normalizeSearch(String search) {
     return (search == null || search.isBlank()) ? null : search;
@@ -108,7 +106,7 @@ public class MerchantQueryRepositoryImpl implements MerchantQueryRepository {
   }
 
   @Override
-  public Future<Merchant> findByMerchantId(int merchantId) {
+  public Future<Merchant> findByMerchantId(Integer merchantId) {
     String sql = "SELECT merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at FROM merchants WHERE merchant_id = $1 AND deleted_at IS NULL";
     return pool.preparedQuery(sql).execute(Tuple.of(merchantId))
         .map(rows -> rows.iterator().hasNext() ? Merchant.fromRow(rows.iterator().next()) : null);
@@ -122,7 +120,21 @@ public class MerchantQueryRepositoryImpl implements MerchantQueryRepository {
   }
 
   @Override
-  public Future<List<Merchant>> findByMerchantUserId(int userId) {
+  public Future<Merchant> findByTrashedById(Integer merchantId) {
+    String sql = "SELECT merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at FROM merchants WHERE merchant_id = $1 AND deleted_at IS NOT NULL";
+    return pool.preparedQuery(sql).execute(Tuple.of(merchantId))
+        .map(rows -> rows.iterator().hasNext() ? Merchant.fromRow(rows.iterator().next()) : null);
+  }
+
+  @Override
+  public Future<Merchant> findByRestoredById(Integer merchantId) {
+    String sql = "SELECT merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at FROM merchants WHERE merchant_id = $1 AND deleted_at IS NULL";
+    return pool.preparedQuery(sql).execute(Tuple.of(merchantId))
+        .map(rows -> rows.iterator().hasNext() ? Merchant.fromRow(rows.iterator().next()) : null);
+  }
+
+  @Override
+  public Future<List<Merchant>> findByMerchantUserId(Integer userId) {
     String sql = "SELECT merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at FROM merchants WHERE user_id = $1 AND deleted_at IS NULL";
     return pool.preparedQuery(sql).execute(Tuple.of(userId))
         .map(rows -> {

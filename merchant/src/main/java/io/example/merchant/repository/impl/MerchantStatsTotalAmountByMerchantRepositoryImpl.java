@@ -4,26 +4,27 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+
+import io.example.merchant.domain.requests.merchant.MonthYearTotalAmountMerchant;
 import io.example.merchant.model.MerchantStats;
 import io.example.merchant.repository.MerchantStatsTotalAmountByMerchantRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsTotalAmountByMerchantRepositoryImpl implements MerchantStatsTotalAmountByMerchantRepository {
   private final Pool pool;
-
-  public MerchantStatsTotalAmountByMerchantRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
   }
 
   @Override
-  public Future<List<MerchantStats.MonthAmount>> getMonthlyTotalAmountByMerchants(pb.merchant.Merchant.FindYearMerchantById req) {
+  public Future<List<MerchantStats.MonthAmount>> getMonthlyTotalAmountByMerchants(
+      MonthYearTotalAmountMerchant req) {
     String sql = """
         WITH monthly_data AS (
             SELECT EXTRACT(YEAR FROM t.transaction_time)::integer AS year,
@@ -46,19 +47,21 @@ public class MerchantStatsTotalAmountByMerchantRepositoryImpl implements Merchan
                   AND md.month = EXTRACT(MONTH FROM gs.month)::integer
             )
         )
-        SELECT month, amount FROM formatted_data 
+        SELECT month, amount FROM formatted_data
         ORDER BY year ASC, TO_DATE(month, 'Mon') ASC
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(req.getYear()), req.getMerchantId()))
         .map(rows -> {
           List<MerchantStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.MonthAmount.fromRow(r));
           return list;
         });
   }
 
   @Override
-  public Future<List<MerchantStats.YearAmount>> getYearlyTotalAmountByMerchants(pb.merchant.Merchant.FindYearMerchantById req) {
+  public Future<List<MerchantStats.YearAmount>> getYearlyTotalAmountByMerchants(
+      MonthYearTotalAmountMerchant req) {
     String sql = """
         WITH yearly_data AS (
             SELECT EXTRACT(YEAR FROM t.transaction_time)::integer AS year, COALESCE(SUM(t.amount), 0)::bigint AS amount
@@ -79,13 +82,14 @@ public class MerchantStatsTotalAmountByMerchantRepositoryImpl implements Merchan
                 WHERE yd.year = y
             )
         )
-        SELECT year, amount FROM formatted_data 
+        SELECT year, amount FROM formatted_data
         ORDER BY year DESC
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(req.getYear(), req.getMerchantId()))
         .map(rows -> {
           List<MerchantStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.YearAmount.fromRow(r));
           return list;
         });
   }

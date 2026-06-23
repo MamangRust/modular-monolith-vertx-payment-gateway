@@ -63,6 +63,10 @@ import io.example.card.service.impl.CardStatsTopupServiceImpl;
 import io.example.card.service.impl.CardStatsTransactionServiceImpl;
 import io.example.card.service.impl.CardStatsTransferServiceImpl;
 import io.example.card.service.impl.CardStatsWithdrawServiceImpl;
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
@@ -74,8 +78,10 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.server.GrpcServer;
 import io.vertx.kafka.client.producer.KafkaProducer;
@@ -90,17 +96,18 @@ public class CardVerticle extends AbstractVerticle {
   private TelemetryConfig telemetryConfig;
   private KafkaService kafkaService;
   private io.vertx.grpc.client.GrpcClient userGrpcClient;
+  private ChaosManager chaosManager;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8085)
         .put("service.name", "card-service");
@@ -146,28 +153,32 @@ public class CardVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
+    this.chaosManager = new ChaosManager();
+    this.chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
     // Command & Query
-    CardQueryRepository queryRepo = new CardQueryRepositoryImpl(pool);
-    CardCommandRepository cmdRepo = new CardCommandRepositoryImpl(pool);
+    CardQueryRepository queryRepo = new CardQueryRepositoryImpl(chaosPool);
+    CardCommandRepository cmdRepo = new CardCommandRepositoryImpl(chaosPool);
 
     // Dashboard Repos
-    CardDashboardBalanceRepository dashBalRepo = new CardDashboardBalanceRepositoryImpl(pool);
-    CardDashboardTopupRepository dashTopRepo = new CardDashboardTopupRepositoryImpl(pool);
-    CardDashboardWithdrawRepository dashWitRepo = new CardDashboardWithdrawRepositoryImpl(pool);
-    CardDashboardTransactionRepository dashTxnRepo = new CardDashboardTransactionRepositoryImpl(pool);
-    CardDashboardTransferRepository dashTrfRepo = new CardDashboardTransferRepositoryImpl(pool);
+    CardDashboardBalanceRepository dashBalRepo = new CardDashboardBalanceRepositoryImpl(chaosPool);
+    CardDashboardTopupRepository dashTopRepo = new CardDashboardTopupRepositoryImpl(chaosPool);
+    CardDashboardWithdrawRepository dashWitRepo = new CardDashboardWithdrawRepositoryImpl(chaosPool);
+    CardDashboardTransactionRepository dashTxnRepo = new CardDashboardTransactionRepositoryImpl(chaosPool);
+    CardDashboardTransferRepository dashTrfRepo = new CardDashboardTransferRepositoryImpl(chaosPool);
 
     // Stats Repos
-    CardStatsBalanceRepository balRepo = new CardStatsBalanceRepositoryImpl(pool);
-    CardStatsBalanceByCardRepository balByCardRepo = new CardStatsBalanceByCardRepositoryImpl(pool);
-    CardStatsTopupRepository topRepo = new CardStatsTopupRepositoryImpl(pool);
-    CardStatsTopupByCardRepository topByCardRepo = new CardStatsTopupByCardRepositoryImpl(pool);
-    CardStatsWithdrawRepository witRepo = new CardStatsWithdrawRepositoryImpl(pool);
-    CardStatsWithdrawByCardRepository witByCardRepo = new CardStatsWithdrawByCardRepositoryImpl(pool);
-    CardStatsTransactionRepository txnRepo = new CardStatsTransactionRepositoryImpl(pool);
-    CardStatsTransactionByCardRepository txnByCardRepo = new CardStatsTransactionByCardRepositoryImpl(pool);
-    CardStatsTransferRepository trfRepo = new CardStatsTransferRepositoryImpl(pool);
-    CardStatsTransferByCardRepository trfByCardRepo = new CardStatsTransferByCardRepositoryImpl(pool);
+    CardStatsBalanceRepository balRepo = new CardStatsBalanceRepositoryImpl(chaosPool);
+    CardStatsBalanceByCardRepository balByCardRepo = new CardStatsBalanceByCardRepositoryImpl(chaosPool);
+    CardStatsTopupRepository topRepo = new CardStatsTopupRepositoryImpl(chaosPool);
+    CardStatsTopupByCardRepository topByCardRepo = new CardStatsTopupByCardRepositoryImpl(chaosPool);
+    CardStatsWithdrawRepository witRepo = new CardStatsWithdrawRepositoryImpl(chaosPool);
+    CardStatsWithdrawByCardRepository witByCardRepo = new CardStatsWithdrawByCardRepositoryImpl(chaosPool);
+    CardStatsTransactionRepository txnRepo = new CardStatsTransactionRepositoryImpl(chaosPool);
+    CardStatsTransactionByCardRepository txnByCardRepo = new CardStatsTransactionByCardRepositoryImpl(chaosPool);
+    CardStatsTransferRepository trfRepo = new CardStatsTransferRepositoryImpl(chaosPool);
+    CardStatsTransferByCardRepository trfByCardRepo = new CardStatsTransferByCardRepositoryImpl(chaosPool);
 
     // 3. Initialize Caching
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
@@ -181,14 +192,16 @@ public class CardVerticle extends AbstractVerticle {
         io.vertx.core.net.SocketAddress.inetSocketAddress(userPort, userHost));
     UserClientRepository userClientRepo = new UserClientRepositoryImpl(userStub);
 
-    // 5. Initialize Kafka
+    // 5. Initialize Kafka (with chaos interceptor)
     KafkaProducer<String, String> kafkaProducer = KafkaConfig.createProducer(vertx);
-    this.kafkaService = new KafkaService(kafkaProducer);
+    KafkaProducer<String, String> chaosKafkaProducer = ChaosKafkaInterceptor.wrap(kafkaProducer, chaosManager, vertx);
+    this.kafkaService = new KafkaService(chaosKafkaProducer);
 
     // 6. Initialize Services
 
     CardQueryService queryService = new CardQueryServiceImpl(queryRepo, redisService, tracingMetrics);
-    CardCommandService cmdService = new CardCommandServiceImpl(cmdRepo, userClientRepo, redisService, tracingMetrics,
+    CardCommandService cmdService = new CardCommandServiceImpl(cmdRepo, queryRepo, userClientRepo, redisService,
+        tracingMetrics,
         kafkaService);
     CardStatsDashboardService dashService = new CardStatsDashboardServiceImpl(dashBalRepo, dashTopRepo, dashWitRepo,
         dashTxnRepo, dashTrfRepo, redisService, tracingMetrics);
@@ -263,8 +276,11 @@ public class CardVerticle extends AbstractVerticle {
     txnHandler.bindAll(grpcServer);
     trfHandler.bindAll(grpcServer);
 
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

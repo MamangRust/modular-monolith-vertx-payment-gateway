@@ -3,7 +3,7 @@ package io.example.transfer.repository.impl;
 import java.util.ArrayList;
 import java.util.List;
 
-import io.example.common.model.PagedResult;
+import io.example.common.domain.PagedResult;
 import io.example.transfer.domain.requests.FindAllTransfers;
 import io.example.transfer.model.Transfer;
 import io.example.transfer.repository.TransferQueryRepository;
@@ -12,13 +12,11 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransferQueryRepositoryImpl implements TransferQueryRepository {
   private final Pool pool;
-
-  public TransferQueryRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String normalizeSearch(String search) {
     return (search == null || search.isBlank()) ? null : search;
@@ -60,6 +58,12 @@ public class TransferQueryRepositoryImpl implements TransferQueryRepository {
   @Override
   public Future<Transfer> getTransferById(int id) {
     String sql = "SELECT * FROM transfers WHERE transfer_id = $1 AND deleted_at IS NULL";
+    return pool.preparedQuery(sql).execute(Tuple.of(id)).map(this::mapSingleOrNull);
+  }
+
+  @Override
+  public Future<Transfer> findByTrashedId(int id) {
+    String sql = "SELECT * FROM transfers WHERE transfer_id = $1 AND deleted_at IS NOT NULL";
     return pool.preparedQuery(sql).execute(Tuple.of(id)).map(this::mapSingleOrNull);
   }
 

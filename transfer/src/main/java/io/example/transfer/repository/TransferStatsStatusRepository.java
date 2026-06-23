@@ -1,13 +1,16 @@
 package io.example.transfer.repository;
 
-import io.example.transfer.model.TransferStats;
-import io.vertx.core.Future;
 import java.util.List;
 
-public interface TransferStatsStatusRepository {
-  Future<List<TransferStats.MonthStatus>> getMonthlyTransferStatus(
-      pb.transfer.Transfer.FindMonthlyTransferStatus req, String status);
+import io.example.transfer.domain.requests.MonthStatusTransfer;
+import io.example.transfer.domain.requests.YearStatusTransferRequest;
+import io.example.transfer.model.TransferStats;
+import io.vertx.core.Future;
 
-  Future<List<TransferStats.YearStatus>> getYearlyTransferStatus(
-      pb.transfer.Transfer.FindYearTransferStatus req, String status);
+public interface TransferStatsStatusRepository {
+    Future<List<TransferStats.MonthStatus>> getMonthlyTransferStatus(
+            MonthStatusTransfer req);
+
+    Future<List<TransferStats.YearStatus>> getYearlyTransferStatus(
+            YearStatusTransferRequest req);
 }

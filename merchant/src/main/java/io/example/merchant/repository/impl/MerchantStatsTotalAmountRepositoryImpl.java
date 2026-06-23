@@ -10,13 +10,11 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsTotalAmountRepositoryImpl implements MerchantStatsTotalAmountRepository {
   private final Pool pool;
-
-  public MerchantStatsTotalAmountRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
@@ -45,13 +43,14 @@ public class MerchantStatsTotalAmountRepositoryImpl implements MerchantStatsTota
                   AND md.month = EXTRACT(MONTH FROM gs.month)::integer
             )
         )
-        SELECT month, amount FROM formatted_data 
+        SELECT month, amount FROM formatted_data
         ORDER BY year ASC, TO_DATE(month, 'Mon') ASC
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(year)))
         .map(rows -> {
           List<MerchantStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.MonthAmount.fromRow(r));
           return list;
         });
   }
@@ -77,13 +76,14 @@ public class MerchantStatsTotalAmountRepositoryImpl implements MerchantStatsTota
                 WHERE yd.year = y
             )
         )
-        SELECT year, amount FROM formatted_data 
+        SELECT year, amount FROM formatted_data
         ORDER BY year DESC
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(year))
         .map(rows -> {
           List<MerchantStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.YearAmount.fromRow(r));
           return list;
         });
   }

@@ -1,6 +1,5 @@
 package io.example.transfer.service;
 
-import io.example.common.model.ApiResponse;
 import io.example.transfer.model.TransferResponse;
 import io.example.transfer.model.TransferResponseDeleteAt;
 import io.vertx.core.Future;
@@ -8,17 +7,17 @@ import pb.transfer.TransferCommand.CreateTransferRequest;
 import pb.transfer.TransferCommand.UpdateTransferRequest;
 
 public interface TransferCommandService {
-  Future<ApiResponse<TransferResponse>> createTransfer(CreateTransferRequest req);
+  Future<TransferResponse> createTransfer(CreateTransferRequest req);
 
-  Future<ApiResponse<TransferResponse>> updateTransfer(UpdateTransferRequest req);
+  Future<TransferResponse> updateTransfer(UpdateTransferRequest req);
 
-  Future<ApiResponse<TransferResponseDeleteAt>> trashTransfer(int transferId);
+  Future<TransferResponseDeleteAt> trashTransfer(Integer transferId);
 
-  Future<ApiResponse<TransferResponseDeleteAt>> restoreTransfer(int transferId);
+  Future<TransferResponseDeleteAt> restoreTransfer(Integer transferId);
 
-  Future<ApiResponse<Boolean>> deleteTransferPermanently(int transferId);
+  Future<Void> deleteTransferPermanently(Integer transferId);
 
-  Future<ApiResponse<Boolean>> restoreAllTransfers();
+  Future<Void> restoreAllTransfers();
 
-  Future<ApiResponse<Boolean>> deleteAllPermanentTransfers();
+  Future<Void> deleteAllPermanentTransfers();
 }

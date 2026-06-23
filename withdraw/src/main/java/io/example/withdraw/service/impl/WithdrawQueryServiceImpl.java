@@ -3,18 +3,15 @@ package io.example.withdraw.service.impl;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.example.common.domain.PagedResult;
-import io.example.common.exception.NotFoundException;
-import io.example.common.model.ApiResponse;
-import io.example.common.model.ApiResponsePagination;
-import io.example.common.model.PaginationMeta;
+import io.example.common.exception.api.NotFoundException;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.example.withdraw.domain.requests.FindAllWithdrawCardNumber;
 import io.example.withdraw.domain.requests.FindAllWithdraws;
 import io.example.withdraw.model.Withdraw;
 import io.example.withdraw.model.WithdrawResponse;
@@ -24,13 +21,14 @@ import io.example.withdraw.service.WithdrawQueryService;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
-import pb.withdraw.Withdraw.FindAllWithdrawByCardNumberRequest;
-import pb.withdraw.Withdraw.FindAllWithdrawRequest;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class WithdrawQueryServiceImpl implements WithdrawQueryService {
   private static final Logger logger = LoggerFactory.getLogger(WithdrawQueryServiceImpl.class);
+  private static final ObjectMapper mapper = new ObjectMapper();
 
   private final WithdrawQueryRepository repo;
   private final RedisService redisService;
@@ -39,280 +37,166 @@ public class WithdrawQueryServiceImpl implements WithdrawQueryService {
   private static final String CACHE_PREFIX = "withdraw:";
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-  public WithdrawQueryServiceImpl(
-      WithdrawQueryRepository repo,
-      RedisService redisService,
-      TracingMetrics tracingMetrics) {
-    this.repo = repo;
-    this.redisService = redisService;
-    this.tracingMetrics = tracingMetrics;
+  private PagedResult<WithdrawResponse> mapWithdrawPagination(PagedResult<Withdraw> result, int page, int pageSize) {
+    int totalRecords = result.getTotalRecords();
+    List<WithdrawResponse> data = result.getData().stream().map(WithdrawResponse::from).toList();
+    return new PagedResult<>(data, totalRecords);
+  }
+
+  private PagedResult<WithdrawResponseDeleteAt> mapWithdrawPaginationDeleteAt(PagedResult<Withdraw> result, int page,
+      int pageSize) {
+    int totalRecords = result.getTotalRecords();
+    List<WithdrawResponseDeleteAt> data = result.getData().stream().map(WithdrawResponseDeleteAt::from).toList();
+    return new PagedResult<>(data, totalRecords);
   }
 
   @Override
-  public Future<ApiResponsePagination<List<WithdrawResponse>>> getWithdraws(FindAllWithdrawRequest req) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getWithdraws");
+  public Future<PagedResult<WithdrawResponse>> getWithdraws(FindAllWithdraws req) {
+    var tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getWithdraws");
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
-
-    String cacheKey = CACHE_PREFIX + "list:" + keyword + ":" + page + ":" + pageSize;
+    String cacheKey = CACHE_PREFIX + "list:" + req.getSearch() + ":" + req.getPage() + ":" + req.getPageSize();
 
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("cache.hit", true);
-            JsonObject json = new JsonObject(cached);
-            List<WithdrawResponse> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(WithdrawResponse.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Withdrawals found (cached)", data, meta));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              PagedResult<Withdraw> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Withdraw>>() {
+              });
+              return Future.succeededFuture(mapWithdrawPagination(typedCached, req.getPage(), req.getPageSize()));
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached withdrawals: {}", e.getMessage());
+            }
           }
           span.setAttribute("cache.hit", false);
-          FindAllWithdraws findAllReq = FindAllWithdraws.builder()
-              .search(keyword)
-              .page(page)
-              .pageSize(pageSize)
-              .build();
-
-          return repo.getWithdraws(findAllReq)
-              .map(result -> {
-                ApiResponsePagination<List<WithdrawResponse>> response = mapWithdrawPagination(result, page, pageSize);
-                redisService.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL);
-                return response;
-              });
+          return repo.getWithdraws(req)
+              .compose(result -> redisService.setJson(cacheKey, result, CACHE_TTL).map(v -> result))
+              .map(result -> mapWithdrawPagination(result, req.getPage(), req.getPageSize()));
         })
-        .onSuccess(response -> {
-          if (response.data() != null) {
-            span.setAttribute("withdraws.count", (long) response.data().size());
-          }
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Withdrawals fetched successfully");
-        })
-        .recover(throwable -> {
-          logger.error("Failed to fetch withdrawals", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_all", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch withdrawals: " + throwable.getMessage()));
+        .onSuccess(
+            v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Withdrawals fetched successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch withdrawals", err);
+          tracingMetrics.completeSpanError(tracingContext, "get_all", err.getMessage());
         });
   }
 
   @Override
-  public Future<ApiResponsePagination<List<WithdrawResponse>>> getWithdrawsByCardNumber(
-      FindAllWithdrawByCardNumberRequest req) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics
-        .startSpan("WithdrawQueryService.getWithdrawsByCardNumber");
+  public Future<PagedResult<WithdrawResponse>> getWithdrawsByCardNumber(FindAllWithdrawCardNumber req) {
+    var tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getWithdrawsByCardNumber");
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
-    String cardNumber = req.getCardNumber();
-
-    String cacheKey = CACHE_PREFIX + "card:" + cardNumber + ":" + keyword + ":" + page + ":" + pageSize;
+    String cacheKey = CACHE_PREFIX + "card:" + req.getCardNumber() + ":" + req.getSearch() + ":" + req.getPage() + ":"
+        + req.getPageSize();
 
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("cache.hit", true);
-            JsonObject json = new JsonObject(cached);
-            List<WithdrawResponse> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(WithdrawResponse.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Withdrawals for card found (cached)", data, meta));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              PagedResult<Withdraw> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Withdraw>>() {
+              });
+              return Future.succeededFuture(mapWithdrawPagination(typedCached, req.getPage(), req.getPageSize()));
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached withdrawals by card number: {}", e.getMessage());
+            }
           }
           span.setAttribute("cache.hit", false);
-          return repo.getWithdrawsByCardNumber(cardNumber, keyword, page, pageSize)
-              .map(result -> {
-                ApiResponsePagination<List<WithdrawResponse>> response = mapWithdrawPagination(result, page, pageSize);
-                redisService.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL);
-                return response;
-              });
+          return repo.getWithdrawsByCardNumber(req.getCardNumber(), req.getSearch(), req.getPage(), req.getPageSize())
+              .compose(result -> redisService.setJson(cacheKey, result, CACHE_TTL).map(v -> result))
+              .map(result -> mapWithdrawPagination(result, req.getPage(), req.getPageSize()));
         })
-        .onSuccess(response -> {
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card",
-              "Withdrawals for card fetched successfully");
-        })
-        .recover(throwable -> {
-          logger.error("Failed to fetch withdrawals for card: {}", cardNumber, throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_by_card", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch withdrawals for card: " + throwable.getMessage()));
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card",
+            "Withdrawals for card fetched successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch withdrawals for card: {}", req.getCardNumber(), err);
+          tracingMetrics.completeSpanError(tracingContext, "get_by_card", err.getMessage());
         });
   }
 
+  // TODO: cache
   @Override
-  public Future<ApiResponsePagination<List<WithdrawResponseDeleteAt>>> getActiveWithdraws(FindAllWithdrawRequest req) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getActiveWithdraws");
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
+  public Future<PagedResult<WithdrawResponseDeleteAt>> getActiveWithdraws(FindAllWithdraws req) {
+    var tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getActiveWithdraws");
 
-    FindAllWithdraws findAllReq = FindAllWithdraws.builder()
-        .search(keyword)
-        .page(page)
-        .pageSize(pageSize)
-        .build();
+    return repo.getActiveWithdraws(req)
+        .map(result -> mapWithdrawPaginationDeleteAt(result, req.getPage(), req.getPageSize()))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_active",
+            "Active withdrawals fetched successfully"))
+        .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, "get_active", err.getMessage()));
+  }
 
-    return repo.getActiveWithdraws(findAllReq)
-        .map(result -> {
-          ApiResponsePagination<List<WithdrawResponseDeleteAt>> response = mapWithdrawPaginationDeleteAt(result, page,
-              pageSize);
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_active", "Active withdrawals fetched successfully");
-          return response;
-        })
-        .recover(throwable -> {
-          tracingMetrics.completeSpanError(tracingContext, "get_active", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch active withdrawals: " + throwable.getMessage()));
-        });
+  // TODO: cache
+  @Override
+  public Future<PagedResult<WithdrawResponseDeleteAt>> getTrashedWithdraws(FindAllWithdraws req) {
+    var tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getTrashedWithdraws");
+
+    return repo.getTrashedWithdraws(req)
+        .map(result -> mapWithdrawPaginationDeleteAt(result, req.getPage(), req.getPageSize()))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed",
+            "Trashed withdrawals fetched successfully"))
+        .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, "get_trashed", err.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<WithdrawResponseDeleteAt>>> getTrashedWithdraws(FindAllWithdrawRequest req) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getTrashedWithdraws");
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
-
-    FindAllWithdraws findAllReq = FindAllWithdraws.builder()
-        .search(keyword)
-        .page(page)
-        .pageSize(pageSize)
-        .build();
-
-    return repo.getTrashedWithdraws(findAllReq)
-        .map(result -> {
-          ApiResponsePagination<List<WithdrawResponseDeleteAt>> response = mapWithdrawPaginationDeleteAt(result, page,
-              pageSize);
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed", "Trashed withdrawals fetched successfully");
-          return response;
-        })
-        .recover(throwable -> {
-          tracingMetrics.completeSpanError(tracingContext, "get_trashed", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch trashed withdrawals: " + throwable.getMessage()));
-        });
-  }
-
-  @Override
-  public Future<ApiResponse<WithdrawResponse>> getWithdrawById(Integer withdrawId) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "WithdrawQueryService.getWithdrawById",
-        Attributes.builder()
-            .put("withdraw.id", (long) withdrawId)
-            .build());
+  public Future<WithdrawResponse> getWithdrawById(Integer withdrawId) {
+    var tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getWithdrawById",
+        Attributes.builder().put("withdraw.id", (long) withdrawId).build());
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
     String cacheKey = CACHE_PREFIX + withdrawId;
 
-    return redisService.get(cacheKey)
+    return redisService.getJson(cacheKey, Withdraw.class)
         .compose(cached -> {
           if (cached != null) {
             span.setAttribute("cache.hit", true);
-            Withdraw withdraw = Withdraw.fromJson(new JsonObject(cached));
-            tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Withdraw fetched from cache");
-            return Future.succeededFuture(ApiResponse.success(
-                "Withdraw fetched successfully (from cache)",
-                WithdrawResponse.from(withdraw)));
+            return Future.succeededFuture(WithdrawResponse.from(cached));
           }
           span.setAttribute("cache.hit", false);
           return repo.getWithdrawById(withdrawId)
               .compose(withdraw -> {
                 if (withdraw == null) {
-                  return Future.failedFuture(new NotFoundException("Withdrawal not found"));
+                  return Future.<Withdraw>failedFuture(new NotFoundException("Withdrawal not found"));
                 }
-                redisService.setJson(cacheKey, withdraw.toJson(), CACHE_TTL);
-                tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Withdraw fetched from DB");
-                return Future.succeededFuture(ApiResponse.success(
-                    "Withdraw fetched successfully",
-                    WithdrawResponse.from(withdraw)));
-              });
+                return redisService.setJson(cacheKey, withdraw, CACHE_TTL).<Withdraw>map(v -> withdraw);
+              })
+              .map(WithdrawResponse::from);
         })
-        .recover(err -> {
+        .onSuccess(
+            v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Withdraw fetched successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch withdraw by id: {}", withdrawId, err);
           tracingMetrics.completeSpanError(tracingContext, "get_by_id", err.getMessage());
-          return Future.succeededFuture(ApiResponse.error(err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<List<WithdrawResponse>>> getWithdrawsByCardNumberPrimitive(String cardNumber) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "WithdrawQueryService.getWithdrawsByCardNumberPrimitive",
-        Attributes.builder()
-            .put("card.number", Objects.requireNonNull(cardNumber))
-            .build());
+  public Future<List<WithdrawResponse>> getWithdrawsByCardNumberPrimitive(String cardNumber) {
+    var tracingContext = tracingMetrics.startSpan("WithdrawQueryService.getWithdrawsByCardNumberPrimitive",
+        Attributes.builder().put("card.number", Objects.requireNonNull(cardNumber)).build());
 
     String cacheKey = CACHE_PREFIX + "card_primitive:" + cardNumber;
 
-    return redisService.get(cacheKey)
+    return redisService.getJsonList(cacheKey, Withdraw.class)
         .compose(cached -> {
-          if (cached != null) {
-            JsonArray arr = new JsonArray(cached);
-            List<WithdrawResponse> data = arr.stream()
-                .map(o -> ((JsonObject) o).mapTo(WithdrawResponse.class))
-                .collect(Collectors.toList());
-            tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card_primitive", "Withdrawals found (cache)");
-            return Future.succeededFuture(ApiResponse.success("Withdrawals found", data));
+          if (cached != null && !cached.isEmpty()) {
+            return Future.succeededFuture(cached.stream().map(WithdrawResponse::from).toList());
           }
           return repo.getWithdrawsByCardNumberPrimitive(cardNumber)
-              .map(list -> {
-                List<WithdrawResponse> data = list.stream().map(WithdrawResponse::from).toList();
-                redisService.setJson(cacheKey, new JsonArray(data.stream().map(JsonObject::mapFrom).toList()),
-                    CACHE_TTL);
-                tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card_primitive", "Withdrawals found (DB)");
-                return ApiResponse.success("Withdrawals found", data);
-              });
+              .compose(list -> {
+                if (list == null || list.isEmpty()) {
+                  return Future.succeededFuture(List.<Withdraw>of());
+                }
+                return redisService.setJsonList(cacheKey, list, CACHE_TTL).<List<Withdraw>>map(v -> list);
+              })
+              .map(list -> list.stream().map(WithdrawResponse::from).toList());
         })
-        .recover(err -> {
+        .onSuccess(
+            v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card_primitive", "Withdrawals found"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch withdrawals for card primitive: {}", cardNumber, err);
           tracingMetrics.completeSpanError(tracingContext, "get_by_card_primitive", err.getMessage());
-          return Future.succeededFuture(ApiResponse.error(err.getMessage()));
         });
-  }
-
-  private ApiResponsePagination<List<WithdrawResponse>> mapWithdrawPagination(
-      PagedResult<Withdraw> result,
-      int page,
-      int pageSize) {
-
-    int totalRecords = result.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<WithdrawResponse> data = result.getData()
-        .stream()
-        .map(WithdrawResponse::from)
-        .toList();
-
-    return new ApiResponsePagination<>(
-        "success",
-        "Withdrawals found",
-        data,
-        new PaginationMeta(
-            page,
-            pageSize,
-            totalPages,
-            totalRecords));
-  }
-
-  private ApiResponsePagination<List<WithdrawResponseDeleteAt>> mapWithdrawPaginationDeleteAt(
-      PagedResult<Withdraw> result,
-      int page,
-      int pageSize) {
-
-    int totalRecords = result.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<WithdrawResponseDeleteAt> data = result.getData()
-        .stream()
-        .map(WithdrawResponseDeleteAt::from)
-        .toList();
-
-    return new ApiResponsePagination<>(
-        "success",
-        "Trashed withdrawals found",
-        data,
-        new PaginationMeta(
-            page,
-            pageSize,
-            totalPages,
-            totalRecords));
   }
 }

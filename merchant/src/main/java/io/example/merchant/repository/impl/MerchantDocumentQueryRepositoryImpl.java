@@ -10,14 +10,12 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 import pb.merchant_document.MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest;
 
+@RequiredArgsConstructor
 public class MerchantDocumentQueryRepositoryImpl implements MerchantDocumentQueryRepository {
   private final Pool pool;
-
-  public MerchantDocumentQueryRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String normalizeSearch(String search) {
     return (search == null || search.isBlank()) ? null : search;
@@ -49,8 +47,15 @@ public class MerchantDocumentQueryRepositoryImpl implements MerchantDocumentQuer
   }
 
   @Override
-  public Future<MerchantDocument> findByIdDocument(int id) {
+  public Future<MerchantDocument> findByIdDocument(Integer id) {
     String sql = "SELECT document_id AS id, merchant_id, document_type, document_url, status, note, created_at, updated_at, deleted_at FROM merchant_documents WHERE document_id = $1 AND deleted_at IS NULL";
+    return pool.preparedQuery(sql).execute(Tuple.of(id))
+        .map(rows -> rows.iterator().hasNext() ? MerchantDocument.fromRow(rows.iterator().next()) : null);
+  }
+
+  @Override
+  public Future<MerchantDocument> findByTrashedByIdDocument(Integer id) {
+    String sql = "SELECT document_id AS id, merchant_id, document_type, document_url, status, note, created_at, updated_at, deleted_at FROM merchant_documents WHERE document_id = $1 AND deleted_at IS NOT NULL";
     return pool.preparedQuery(sql).execute(Tuple.of(id))
         .map(rows -> rows.iterator().hasNext() ? MerchantDocument.fromRow(rows.iterator().next()) : null);
   }

@@ -1,6 +1,6 @@
 package io.example.transfer.repository;
 
-import io.example.common.model.PagedResult;
+import io.example.common.domain.PagedResult;
 import io.example.transfer.domain.requests.FindAllTransfers;
 import io.example.transfer.model.Transfer;
 import io.vertx.core.Future;
@@ -14,6 +14,8 @@ public interface TransferQueryRepository {
   Future<PagedResult<Transfer>> getTrashedTransfers(FindAllTransfers req);
 
   Future<Transfer> getTransferById(int id);
+
+  Future<Transfer> findByTrashedId(int id);
 
   Future<List<Transfer>> getTransfersByCardNumber(String card);
 

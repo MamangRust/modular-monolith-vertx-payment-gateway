@@ -1,8 +1,9 @@
 package io.example.apigateway.handler;
 
-import io.example.apigateway.utils.ProtoMapper;
+import io.example.apigateway.utils.GrpcGatewayUtils;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
+import lombok.RequiredArgsConstructor;
 import pb.saldo.Saldo;
 import pb.saldo.SaldoCommand;
 import pb.saldo.VertxSaldoCommandServiceGrpcClient;
@@ -10,175 +11,141 @@ import pb.saldo.VertxSaldoQueryServiceGrpcClient;
 import pb.saldo.stats.VertxSaldoStatsBalanceServiceGrpcClient;
 import pb.saldo.stats.VertxSaldoStatsTotalBalanceGrpcClient;
 
+@RequiredArgsConstructor
 public class SaldoProxyHandler {
   private final VertxSaldoQueryServiceGrpcClient queryClient;
   private final VertxSaldoCommandServiceGrpcClient commandClient;
   private final VertxSaldoStatsBalanceServiceGrpcClient balanceStatsClient;
   private final VertxSaldoStatsTotalBalanceGrpcClient totalStatsClient;
 
-  public SaldoProxyHandler(
-      VertxSaldoQueryServiceGrpcClient queryClient, 
-      VertxSaldoCommandServiceGrpcClient commandClient, 
-      VertxSaldoStatsBalanceServiceGrpcClient balanceStatsClient,
-      VertxSaldoStatsTotalBalanceGrpcClient totalStatsClient) {
-    this.queryClient = queryClient;
-    this.commandClient = commandClient;
-    this.balanceStatsClient = balanceStatsClient;
-    this.totalStatsClient = totalStatsClient;
+  private Saldo.FindAllSaldoRequest buildFindAllSaldoReq(RoutingContext ctx) {
+    return Saldo.FindAllSaldoRequest.newBuilder()
+        .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+        .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+        .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
+        .build();
+  }
+
+  private Saldo.FindYearlySaldo buildFindYearlySaldoReq(RoutingContext ctx) {
+    return Saldo.FindYearlySaldo.newBuilder()
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .build();
   }
 
   public void getAllSaldos(RoutingContext ctx) {
-    var req = Saldo.FindAllSaldoRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-
-    queryClient.findAllSaldo(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+    queryClient.findAllSaldo(buildFindAllSaldoReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getActiveSaldos(RoutingContext ctx) {
-    var req = Saldo.FindAllSaldoRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-
-    queryClient.findByActive(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+    queryClient.findByActive(buildFindAllSaldoReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getTrashedSaldos(RoutingContext ctx) {
-    var req = Saldo.FindAllSaldoRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-
-    queryClient.findByTrashed(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+    queryClient.findByTrashed(buildFindAllSaldoReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getSaldoById(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("saldoId"));
-    var req = Saldo.FindByIdSaldoRequest.newBuilder().setSaldoId(id).build();
-
+    var req = Saldo.FindByIdSaldoRequest.newBuilder()
+        .setSaldoId(GrpcGatewayUtils.getSafePathInt(ctx, "saldoId"))
+        .build();
     queryClient.findByIdSaldo(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void createSaldo(RoutingContext ctx) {
     JsonObject body = ctx.body().asJsonObject();
     var req = SaldoCommand.CreateSaldoRequest.newBuilder()
-        .setCardNumber(body.getString("card_number", ""))
-        .setTotalBalance(body.getInteger("balance", 0))
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setTotalBalance(GrpcGatewayUtils.getJsonInteger(body, "balance", 0))
         .build();
-
     commandClient.createSaldo(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 201))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void updateSaldo(RoutingContext ctx) {
     JsonObject body = ctx.body().asJsonObject();
     var req = SaldoCommand.UpdateSaldoRequest.newBuilder()
-        .setSaldoId(body.getInteger("id", 0))
-        .setCardNumber(body.getString("card_number", ""))
-        .setTotalBalance(body.getInteger("balance", 0))
+        .setSaldoId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setTotalBalance(GrpcGatewayUtils.getJsonInteger(body, "balance", 0))
         .build();
-
     commandClient.updateSaldo(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void trashSaldo(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("saldoId"));
-    var req = Saldo.FindByIdSaldoRequest.newBuilder().setSaldoId(id).build();
-
+    var req = Saldo.FindByIdSaldoRequest.newBuilder()
+        .setSaldoId(GrpcGatewayUtils.getSafePathInt(ctx, "saldoId"))
+        .build();
     commandClient.trashedSaldo(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void restoreSaldo(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("saldoId"));
-    var req = Saldo.FindByIdSaldoRequest.newBuilder().setSaldoId(id).build();
-
+    var req = Saldo.FindByIdSaldoRequest.newBuilder()
+        .setSaldoId(GrpcGatewayUtils.getSafePathInt(ctx, "saldoId"))
+        .build();
     commandClient.restoreSaldo(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void deleteSaldoPermanently(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("saldoId"));
-    var req = Saldo.FindByIdSaldoRequest.newBuilder().setSaldoId(id).build();
-
+    var req = Saldo.FindByIdSaldoRequest.newBuilder()
+        .setSaldoId(GrpcGatewayUtils.getSafePathInt(ctx, "saldoId"))
+        .build();
     commandClient.deleteSaldoPermanent(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void restoreAllSaldos(RoutingContext ctx) {
     commandClient.restoreAllSaldo(com.google.protobuf.Empty.getDefaultInstance())
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void deleteAllPermanentSaldos(RoutingContext ctx) {
     commandClient.deleteAllSaldoPermanent(com.google.protobuf.Empty.getDefaultInstance())
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
-  // === STATS ===
   public void getMonthlyTotalSaldoBalance(RoutingContext ctx) {
-    int year = ctx.queryParams().contains("year") ? Integer.parseInt(ctx.queryParams().get("year")) : 2024;
-    int month = ctx.queryParams().contains("month") ? Integer.parseInt(ctx.queryParams().get("month")) : 1;
     var req = Saldo.FindMonthlySaldoTotalBalance.newBuilder()
-        .setYear(year)
-        .setMonth(month)
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .setMonth(GrpcGatewayUtils.getQueryInt(ctx, "month", 1))
         .build();
     totalStatsClient.findMonthlyTotalSaldoBalance(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyTotalSaldoBalances(RoutingContext ctx) {
-    int year = ctx.queryParams().contains("year") ? Integer.parseInt(ctx.queryParams().get("year")) : 2024;
-    var req = Saldo.FindYearlySaldo.newBuilder().setYear(year).build();
-    totalStatsClient.findYearTotalSaldoBalance(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+    totalStatsClient.findYearTotalSaldoBalance(buildFindYearlySaldoReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getMonthlySaldoBalances(RoutingContext ctx) {
-    int year = ctx.queryParams().contains("year") ? Integer.parseInt(ctx.queryParams().get("year")) : 2024;
-    var req = Saldo.FindYearlySaldo.newBuilder().setYear(year).build();
-    balanceStatsClient.findMonthlySaldoBalances(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
+    balanceStatsClient.findMonthlySaldoBalances(buildFindYearlySaldoReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlySaldoBalances(RoutingContext ctx) {
-    int year = ctx.queryParams().contains("year") ? Integer.parseInt(ctx.queryParams().get("year")) : 2024;
-    var req = Saldo.FindYearlySaldo.newBuilder().setYear(year).build();
-    balanceStatsClient.findYearlySaldoBalances(req)
-        .onSuccess(resp -> sendResponse(ctx, resp, 200))
-        .onFailure(ctx::fail);
-  }
-
-  private void sendResponse(RoutingContext ctx, com.google.protobuf.MessageOrBuilder proto, int defaultStatus) {
-    JsonObject json = ProtoMapper.toJson(proto);
-    int status = json.getInteger("status", defaultStatus);
-    ctx.response()
-        .setStatusCode(status == 0 ? defaultStatus : status)
-        .putHeader("Content-Type", "application/json")
-        .end(json.encode());
+    balanceStatsClient.findYearlySaldoBalances(buildFindYearlySaldoReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 }

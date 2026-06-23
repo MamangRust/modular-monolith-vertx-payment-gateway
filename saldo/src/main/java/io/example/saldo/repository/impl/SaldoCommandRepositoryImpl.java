@@ -11,13 +11,11 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
   private final Pool client;
-
-  public SaldoCommandRepositoryImpl(Pool client) {
-    this.client = client;
-  }
 
   @Override
   public Future<Boolean> checkCardExists(String cardNumber) {
@@ -29,9 +27,9 @@ public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
   @Override
   public Future<Saldo> createSaldo(CreateSaldoRequest req) {
     return client.preparedQuery("""
-            INSERT INTO saldos (card_number, total_balance, created_at, updated_at)
-            VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *
-            """)
+        INSERT INTO saldos (card_number, total_balance, created_at, updated_at)
+        VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING *
+        """)
         .execute(Tuple.of(req.getCardNumber(), req.getTotalBalance()))
         .map(this::mapSingle);
   }
@@ -39,9 +37,9 @@ public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
   @Override
   public Future<Saldo> updateSaldo(UpdateSaldoRequest req) {
     return client.preparedQuery("""
-            UPDATE saldos SET card_number = $2, total_balance = $3, updated_at = CURRENT_TIMESTAMP
-            WHERE saldo_id = $1 AND deleted_at IS NULL RETURNING *
-            """)
+        UPDATE saldos SET card_number = $2, total_balance = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE saldo_id = $1 AND deleted_at IS NULL RETURNING *
+        """)
         .execute(Tuple.of(req.getSaldoId(), req.getCardNumber(), req.getTotalBalance()))
         .map(this::mapSingle);
   }
@@ -49,9 +47,9 @@ public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
   @Override
   public Future<Saldo> updateSaldoBalance(UpdateSaldoBalanceRequest req) {
     return client.preparedQuery("""
-            UPDATE saldos SET total_balance = $2, updated_at = CURRENT_TIMESTAMP
-            WHERE card_number = $1 AND deleted_at IS NULL RETURNING *
-            """)
+        UPDATE saldos SET total_balance = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE card_number = $1 AND deleted_at IS NULL RETURNING *
+        """)
         .execute(Tuple.of(req.getCardNumber(), req.getTotalBalance()))
         .map(this::mapSingle);
   }
@@ -59,43 +57,47 @@ public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
   @Override
   public Future<Saldo> updateSaldoWithdraw(UpdateSaldoWithdrawRequest req) {
     return client.preparedQuery("""
-            UPDATE saldos
-            SET withdraw_amount = $2, total_balance = total_balance - $2, withdraw_time = $3, updated_at = CURRENT_TIMESTAMP
-            WHERE card_number = $1 AND deleted_at IS NULL AND total_balance >= $2 RETURNING *
-            """)
+        UPDATE saldos
+        SET withdraw_amount = $2, total_balance = total_balance - $2, withdraw_time = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE card_number = $1 AND deleted_at IS NULL AND total_balance >= $2 RETURNING *
+        """)
         .execute(Tuple.of(req.getCardNumber(), req.getWithdrawAmount(), req.getWithdrawTime()))
         .map(this::mapSingle);
   }
 
   @Override
   public Future<Saldo> trash(Integer id) {
-    return client.preparedQuery("UPDATE saldos SET deleted_at = CURRENT_TIMESTAMP WHERE saldo_id = $1 AND deleted_at IS NULL RETURNING *")
+    return client
+        .preparedQuery(
+            "UPDATE saldos SET deleted_at = CURRENT_TIMESTAMP WHERE saldo_id = $1 AND deleted_at IS NULL RETURNING *")
         .execute(Tuple.of(id))
         .map(this::mapSingle);
   }
 
   @Override
   public Future<Saldo> restore(Integer id) {
-    return client.preparedQuery("UPDATE saldos SET deleted_at = NULL WHERE saldo_id = $1 AND deleted_at IS NOT NULL RETURNING *")
+    return client
+        .preparedQuery("UPDATE saldos SET deleted_at = NULL WHERE saldo_id = $1 AND deleted_at IS NOT NULL RETURNING *")
         .execute(Tuple.of(id))
         .map(this::mapSingle);
   }
 
   @Override
-  public Future<Void> deletePermanent(Integer id) {
+  public Future<Boolean> deletePermanent(Integer id) {
     return client.preparedQuery("DELETE FROM saldos WHERE saldo_id = $1 AND deleted_at IS NOT NULL")
         .execute(Tuple.of(id))
-        .mapEmpty();
+        .map(result -> result.rowCount() > 0);
   }
 
   @Override
-  public Future<Void> restoreAll() {
-    return client.query("UPDATE saldos SET deleted_at = NULL WHERE deleted_at IS NOT NULL").execute().mapEmpty();
+  public Future<Integer> restoreAll() {
+    return client.query("UPDATE saldos SET deleted_at = NULL WHERE deleted_at IS NOT NULL").execute()
+        .map(RowSet::rowCount);
   }
 
   @Override
-  public Future<Void> deleteAllPermanent() {
-    return client.query("DELETE FROM saldos WHERE deleted_at IS NOT NULL").execute().mapEmpty();
+  public Future<Integer> deleteAllPermanent() {
+    return client.query("DELETE FROM saldos WHERE deleted_at IS NOT NULL").execute().map(RowSet::rowCount);
   }
 
   private Saldo mapSingle(RowSet<Row> rows) {

@@ -3,10 +3,16 @@ package io.example.saldo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
 import io.example.common.observability.TracingMetrics;
+import io.example.common.service.KafkaService;
 import io.example.common.service.RedisService;
 import io.example.saldo.domain.requests.CreateSaldoRequest;
 import io.example.saldo.handler.SaldoCommandHandler;
@@ -34,8 +40,10 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.grpc.server.GrpcServer;
@@ -54,18 +62,20 @@ public class SaldoVerticle extends AbstractVerticle {
 
   private TelemetryConfig telemetryConfig;
   private io.vertx.grpc.client.GrpcClient cardGrpcClient;
+  private KafkaService kafkaService;
   private KafkaConsumer<String, JsonObject> kafkaConsumer;
+  private ChaosManager chaosManager;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8084)
         .put("card_service_host", "localhost")
@@ -113,10 +123,14 @@ public class SaldoVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
-    SaldoQueryRepository queryRepo = new SaldoQueryRepositoryImpl(pool);
-    SaldoCommandRepository cmdRepo = new SaldoCommandRepositoryImpl(pool);
-    SaldoStatsTotalRepository statsTotalRepo = new SaldoStatsTotalRepositoryImpl(pool);
-    SaldoStatsBalanceRepository statsBalRepo = new SaldoStatsBalanceRepositoryImpl(pool);
+    this.chaosManager = new ChaosManager();
+    this.chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    SaldoQueryRepository queryRepo = new SaldoQueryRepositoryImpl(chaosPool);
+    SaldoCommandRepository cmdRepo = new SaldoCommandRepositoryImpl(chaosPool);
+    SaldoStatsTotalRepository statsTotalRepo = new SaldoStatsTotalRepositoryImpl(chaosPool);
+    SaldoStatsBalanceRepository statsBalRepo = new SaldoStatsBalanceRepositoryImpl(chaosPool);
 
     // 3. Initialize gRPC Client for Card Service
     String cardHost = rawConfig.getString("card_service_host", "localhost");
@@ -131,16 +145,21 @@ public class SaldoVerticle extends AbstractVerticle {
 
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
 
-    // 5. Initialize Services
-    SaldoQueryService queryService = new SaldoQueryServiceImpl(queryRepo, statsTotalRepo, statsBalRepo, redisService,
+    // 5. Initialize Kafka (with chaos interceptor)
+    this.kafkaService = new KafkaService(
+        ChaosKafkaInterceptor.wrap(KafkaConfig.createProducer(vertx), chaosManager, vertx));
+
+    // 6. Initialize Services
+    SaldoQueryService queryService = new SaldoQueryServiceImpl(queryRepo, redisService,
         tracingMetrics);
-    SaldoCommandService cmdService = new SaldoCommandServiceImpl(cmdRepo, cardClientRepo, redisService, tracingMetrics);
+    SaldoCommandService cmdService = new SaldoCommandServiceImpl(cmdRepo, queryRepo, cardClientRepo, redisService,
+        kafkaService, tracingMetrics);
     SaldoStatsBalanceService statsBalService = new SaldoStatsBalanceServiceImpl(statsBalRepo, redisService,
         tracingMetrics);
     SaldoStatsTotalService statsTotalService = new SaldoStatsTotalServiceImpl(statsTotalRepo, redisService,
         tracingMetrics);
 
-    // 6. Initialize Handlers
+    // 7. Initialize Handlers
     var queryHandler = new SaldoQueryHandler(queryService);
     var cmdHandler = new SaldoCommandHandler(cmdService);
     var statsBalHandler = new SaldoStatsBalanceHandler(statsBalService);
@@ -187,14 +206,8 @@ public class SaldoVerticle extends AbstractVerticle {
                   .build();
 
               cmdService.createSaldo(createReq)
-                  .onSuccess(apiResponse -> {
-                    if ("success".equals(apiResponse.status())) {
-                      log.info("✅ Successfully handled create saldo from Kafka for card: {}", cardNumber);
-                    } else {
-                      log.error("❌ Failed to handle create saldo from Kafka for card: {} | Message: {}", cardNumber,
-                          apiResponse.message());
-                    }
-                  })
+                  .onSuccess(saldoResponse -> log.info("✅ Successfully handled create saldo from Kafka for card: {}",
+                      cardNumber))
                   .onFailure(
                       err -> log.error("❌ Exception handling create saldo from Kafka for card: {}", cardNumber, err));
 
@@ -223,6 +236,9 @@ public class SaldoVerticle extends AbstractVerticle {
     if (cardGrpcClient != null) {
       cardGrpcClient.close();
     }
+    if (kafkaService != null) {
+      kafkaService.close();
+    }
     if (kafkaConsumer != null) {
       kafkaConsumer.close();
     }
@@ -242,8 +258,11 @@ public class SaldoVerticle extends AbstractVerticle {
     statsBal.bindAll(grpcServer);
     statsTotal.bindAll(grpcServer);
 
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

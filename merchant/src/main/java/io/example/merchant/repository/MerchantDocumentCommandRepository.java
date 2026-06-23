@@ -13,13 +13,13 @@ public interface MerchantDocumentCommandRepository {
 
   Future<MerchantDocument> updateMerchantDocumentStatus(UpdateMerchantDocumentStatusRequest request);
 
-  Future<MerchantDocument> trashedMerchantDocument(int merchantDocumentId);
+  Future<MerchantDocument> trashedMerchantDocument(Integer merchantDocumentId);
 
-  Future<MerchantDocument> restoreMerchantDocument(int merchantDocumentId);
+  Future<MerchantDocument> restoreMerchantDocument(Integer merchantDocumentId);
 
-  Future<Boolean> deleteMerchantDocumentPermanent(int merchantDocumentId);
+  Future<Boolean> deleteMerchantDocumentPermanent(Integer merchantDocumentId);
 
-  Future<Boolean> restoreAllMerchantDocuments();
+  Future<Integer> restoreAllMerchantDocuments();
 
-  Future<Boolean> deleteAllMerchantDocumentsPermanent();
+  Future<Integer> deleteAllMerchantDocumentsPermanent();
 }

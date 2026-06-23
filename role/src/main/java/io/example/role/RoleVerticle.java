@@ -1,5 +1,7 @@
 package io.example.role;
 
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -40,11 +42,11 @@ public class RoleVerticle extends AbstractVerticle {
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8081)
         .put("service.name", "role-service");
@@ -64,11 +66,11 @@ public class RoleVerticle extends AbstractVerticle {
   @Override
   public void start(Promise<Void> startPromise) {
     JsonObject rawConfig = config();
-    
+
     // 1. Initialize Telemetry
     JsonObject telConfig = rawConfig.copy();
     if (!telConfig.containsKey("service.name")) {
-        telConfig.put("service.name", "role-service");
+      telConfig.put("service.name", "role-service");
     }
     telemetryConfig = new TelemetryConfig(telConfig);
     OpenTelemetry openTelemetry = telemetryConfig.initialize();
@@ -89,9 +91,13 @@ public class RoleVerticle extends AbstractVerticle {
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
-    
-    RoleQueryRepository queryRepo = new RoleQueryRepositoryImpl(pool);
-    RoleCommandRepository cmdRepo = new RoleCommandRepositoryImpl(pool);
+
+    ChaosManager chaosManager = new ChaosManager();
+    chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    RoleQueryRepository queryRepo = new RoleQueryRepositoryImpl(chaosPool);
+    RoleCommandRepository cmdRepo = new RoleCommandRepositoryImpl(chaosPool);
 
     // 3. Initialize Caching
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
@@ -99,12 +105,12 @@ public class RoleVerticle extends AbstractVerticle {
 
     // 4. Initialize Services
     RoleQueryService queryService = new RoleQueryServiceImpl(queryRepo, redisService, tracingMetrics);
-    RoleCommandService cmdService = new RoleCommandServiceImpl(cmdRepo, redisService, tracingMetrics);
+    RoleCommandService cmdService = new RoleCommandServiceImpl(cmdRepo, queryRepo, redisService, tracingMetrics);
 
     // 5. Initialize Handlers
     var queryHandler = new RoleQueryHandler(queryService);
     var cmdHandler = new RoleCommandHandler(cmdService);
-    
+
     int port = cfg.getGrpcPort();
 
     startGrpcServer(queryHandler, cmdHandler, port)

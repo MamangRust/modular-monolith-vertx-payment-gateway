@@ -1,7 +1,12 @@
 package io.example.merchant.service.impl;
 
 import java.util.Map;
-import io.example.common.model.ApiResponse;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import io.example.common.exception.grpc.BadRequestException;
+import io.example.common.exception.grpc.NotFoundException;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.KafkaService;
 import io.example.common.service.RedisService;
@@ -9,47 +14,43 @@ import io.example.common.utils.EmailTemplate;
 import io.example.merchant.model.MerchantDocumentResponse;
 import io.example.merchant.model.MerchantDocumentResponseDeleteAt;
 import io.example.merchant.repository.MerchantDocumentCommandRepository;
+import io.example.merchant.repository.MerchantDocumentQueryRepository;
 import io.example.merchant.repository.MerchantQueryRepository;
 import io.example.merchant.repository.UserClientRepository;
 import io.example.merchant.service.MerchantDocumentCommandService;
+import io.opentelemetry.api.common.Attributes;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
+import lombok.RequiredArgsConstructor;
 import pb.merchant_document.MerchantDocumentCommand.CreateMerchantDocumentRequest;
 import pb.merchant_document.MerchantDocumentCommand.UpdateMerchantDocumentRequest;
 import pb.merchant_document.MerchantDocumentCommand.UpdateMerchantDocumentStatusRequest;
 import pb.user.User.UserResponse;
 
+@RequiredArgsConstructor
 public class MerchantDocumentCommandServiceImpl implements MerchantDocumentCommandService {
+  private static final Logger logger = LoggerFactory.getLogger(MerchantDocumentCommandServiceImpl.class);
+
   private final MerchantDocumentCommandRepository repo;
+  private final MerchantDocumentQueryRepository queryRepository;
   private final MerchantQueryRepository merchantQueryRepo;
   private final UserClientRepository userClientRepo;
   private final RedisService redisService;
   private final KafkaService kafkaService;
   private final TracingMetrics tracingMetrics;
 
-  public MerchantDocumentCommandServiceImpl(
-      MerchantDocumentCommandRepository repo,
-      MerchantQueryRepository merchantQueryRepo,
-      UserClientRepository userClientRepo,
-      RedisService redisService,
-      KafkaService kafkaService,
-      TracingMetrics tracingMetrics) {
-    this.repo = repo;
-    this.merchantQueryRepo = merchantQueryRepo;
-    this.userClientRepo = userClientRepo;
-    this.redisService = redisService;
-    this.kafkaService = kafkaService;
-    this.tracingMetrics = tracingMetrics;
+  private Future<Void> invalidateListCache() {
+    return redisService.delete("merchant_document:list")
+        .compose(v -> redisService.delete("merchant_document:list:trashed")).<Void>mapEmpty();
   }
 
   @Override
-  public Future<ApiResponse<MerchantDocumentResponse>> createMerchantDocument(CreateMerchantDocumentRequest request) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.createMerchantDocument");
+  public Future<MerchantDocumentResponse> createMerchantDocument(CreateMerchantDocumentRequest request) {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.createMerchantDocument");
     return merchantQueryRepo.findByMerchantId(request.getMerchantId())
         .compose(merchant -> {
           if (merchant == null)
-            return Future.failedFuture("Merchant not found");
+            return Future.failedFuture(new NotFoundException("Merchant not found"));
           return userClientRepo.getUserById(merchant.getUserId())
               .compose(userObj -> {
                 UserResponse user = (UserResponse) userObj;
@@ -67,48 +68,48 @@ public class MerchantDocumentCommandServiceImpl implements MerchantDocumentComma
                           .put("subject", "Merchant Verification Pending - Action Required")
                           .put("body", htmlBody);
 
-                      return kafkaService.sendMessage("email-service-topic-merchant-document-created",
-                          String.valueOf(doc.getId()), emailPayload)
+                      return kafkaService
+                          .sendMessage("email-service-topic-merchant-document-created", String.valueOf(doc.getId()),
+                              emailPayload)
                           .map(v -> doc)
                           .recover(err -> Future.succeededFuture(doc));
                     });
               });
         })
-        .map(doc -> ApiResponse.success("Merchant document created successfully", MerchantDocumentResponse.from(doc)))
+        .map(MerchantDocumentResponse::from)
         .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "createMerchantDocument", "Success"))
         .onFailure(e -> tracingMetrics.completeSpanError(ctx, "createMerchantDocument", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<MerchantDocumentResponse>> updateMerchantDocument(UpdateMerchantDocumentRequest request) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.updateMerchantDocument");
+  public Future<MerchantDocumentResponse> updateMerchantDocument(UpdateMerchantDocumentRequest request) {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.updateMerchantDocument");
     return repo.updateMerchantDocument(request)
         .compose(doc -> {
           if (doc == null)
-            return Future.failedFuture("Document not found");
-          return redisService.delete("merchant_document:" + doc.getId())
-              .map(v -> ApiResponse.success("Merchant document updated successfully",
-                  MerchantDocumentResponse.from(doc)));
+            return Future.failedFuture(new NotFoundException("Document not found"));
+          return redisService.delete("merchant_document:" + doc.getId()).map(v -> doc);
         })
+        .map(MerchantDocumentResponse::from)
         .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "updateMerchantDocument", "Success"))
         .onFailure(e -> tracingMetrics.completeSpanError(ctx, "updateMerchantDocument", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<MerchantDocumentResponse>> updateMerchantDocumentStatus(
-      UpdateMerchantDocumentStatusRequest request) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.updateMerchantDocumentStatus");
+  public Future<MerchantDocumentResponse> updateMerchantDocumentStatus(UpdateMerchantDocumentStatusRequest request) {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.updateMerchantDocumentStatus");
     return merchantQueryRepo.findByMerchantId(request.getMerchantId())
         .compose(merchant -> {
           if (merchant == null)
-            return Future.failedFuture("Merchant not found");
+            return Future.failedFuture(new NotFoundException("Merchant not found"));
           return userClientRepo.getUserById(merchant.getUserId())
               .compose(userObj -> {
                 UserResponse user = (UserResponse) userObj;
                 return repo.updateMerchantDocumentStatus(request)
                     .compose(updated -> {
+                      if (updated == null)
+                        return Future.failedFuture(new NotFoundException("Document not found on update"));
+
                       String status = request.getStatus();
                       String note = request.getNote();
                       String subject = "";
@@ -136,7 +137,7 @@ public class MerchantDocumentCommandServiceImpl implements MerchantDocumentComma
                           buttonLabel = "Re-upload Documents";
                         }
                         default -> {
-                          return Future.succeededFuture(updated);
+                          return redisService.delete("merchant_document:" + updated.getId()).map(v -> updated);
                         }
                       }
 
@@ -144,86 +145,113 @@ public class MerchantDocumentCommandServiceImpl implements MerchantDocumentComma
                         message += String.format("<br><br><b>Reviewer Note:</b><br><i>%s</i>", note);
                       }
 
-                      String htmlBody = EmailTemplate.generateHtml(Map.of(
-                          "Title", subject,
-                          "Message", message,
-                          "Button", buttonLabel,
-                          "Link", link));
-
-                      JsonObject emailPayload = new JsonObject()
-                          .put("email", user.getEmail())
-                          .put("subject", subject)
+                      String htmlBody = EmailTemplate.generateHtml(
+                          Map.of("Title", subject, "Message", message, "Button", buttonLabel, "Link", link));
+                      JsonObject emailPayload = new JsonObject().put("email", user.getEmail()).put("subject", subject)
                           .put("body", htmlBody);
 
-                      return kafkaService.sendMessage("email-service-topic-merchant-document-update-status",
-                          String.valueOf(request.getMerchantId()), emailPayload)
-                          .compose(v -> redisService.delete("merchant_document:" + updated.getId()))
-                          .map(v -> updated)
-                          .recover(err -> redisService.delete("merchant_document:" + updated.getId()).map(v -> updated));
+                      return kafkaService
+                          .sendMessage("email-service-topic-merchant-document-update-status",
+                              String.valueOf(request.getMerchantId()), emailPayload)
+                          .compose(v -> redisService.delete("merchant_document:" + updated.getId())).map(v -> updated)
+                          .recover(
+                              err -> redisService.delete("merchant_document:" + updated.getId()).map(v -> updated));
                     });
               });
         })
-        .map(updated -> ApiResponse.success("Merchant document status updated successfully",
-            MerchantDocumentResponse.from(updated)))
+        .map(MerchantDocumentResponse::from)
         .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "updateMerchantDocumentStatus", "Success"))
         .onFailure(e -> tracingMetrics.completeSpanError(ctx, "updateMerchantDocumentStatus", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<MerchantDocumentResponseDeleteAt>> trashedMerchantDocument(int documentId) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.trashedMerchantDocument");
+  public Future<MerchantDocumentResponseDeleteAt> trashedMerchantDocument(Integer documentId) {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.trashedMerchantDocument");
     return repo.trashedMerchantDocument(documentId)
         .compose(doc -> {
           if (doc == null)
-            return Future.failedFuture("Document not found");
-          return redisService.delete("merchant_document:" + documentId)
-              .map(v -> ApiResponse.success("Merchant document trashed successfully",
-                  MerchantDocumentResponseDeleteAt.from(doc)));
+            return Future.failedFuture(new NotFoundException("Document not found"));
+          return redisService.delete("merchant_document:" + documentId).map(v -> doc);
         })
+        .map(MerchantDocumentResponseDeleteAt::from)
         .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "trashedMerchantDocument", "Success"))
         .onFailure(e -> tracingMetrics.completeSpanError(ctx, "trashedMerchantDocument", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<MerchantDocumentResponseDeleteAt>> restoreMerchantDocument(int documentId) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.restoreMerchantDocument");
-    return repo.restoreMerchantDocument(documentId)
-        .map(doc -> ApiResponse.success("Merchant document restored successfully",
-            MerchantDocumentResponseDeleteAt.from(doc)))
+  public Future<MerchantDocumentResponseDeleteAt> restoreMerchantDocument(Integer documentId) {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.restoreMerchantDocument");
+
+    return queryRepository.findByTrashedByIdDocument(documentId)
+        .compose(trashed -> {
+          if (trashed == null)
+            return Future.failedFuture(new BadRequestException("Document not found or must be trashed first"));
+          return repo.restoreMerchantDocument(documentId);
+        })
+        .compose(restored -> {
+          if (restored == null)
+            return Future.failedFuture(new NotFoundException("Document not found on restore"));
+          return redisService.delete("merchant_document:" + documentId).map(v -> restored);
+        })
+        .map(MerchantDocumentResponseDeleteAt::from)
         .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "restoreMerchantDocument", "Success"))
         .onFailure(e -> tracingMetrics.completeSpanError(ctx, "restoreMerchantDocument", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<Boolean>> deleteMerchantDocumentPermanent(int documentId) {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.deleteMerchantDocumentPermanent");
-    return repo.deleteMerchantDocumentPermanent(documentId)
-        .compose(success -> redisService.delete("merchant_document:" + documentId)
-            .map(v -> ApiResponse.success("Merchant document deleted permanently", success)))
-        .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "deleteMerchantDocumentPermanent", "Success"))
-        .onFailure(e -> tracingMetrics.completeSpanError(ctx, "deleteMerchantDocumentPermanent", e.getMessage()));
+  public Future<Void> deleteMerchantDocumentPermanent(Integer documentId) {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.deleteMerchantDocumentPermanent",
+        Attributes.builder().put("document.id", documentId).build());
+
+    return queryRepository.findByTrashedByIdDocument(documentId)
+        .compose(trashed -> {
+          if (trashed == null)
+            return Future.failedFuture(new BadRequestException("Document not found or must be trashed first"));
+          return repo.deleteMerchantDocumentPermanent(documentId);
+        })
+        .compose(deleted -> {
+          if (!deleted)
+            return Future.failedFuture(new BadRequestException("Document not found or must be trashed first"));
+          return redisService.delete("merchant_document:" + documentId).map(v -> (Void) null);
+        })
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "deleteMerchantDocumentPermanent", "Success"))
+        .onFailure(e -> {
+          logger.error("Failed to deletePermanent document: {}", documentId, e);
+          tracingMetrics.completeSpanError(ctx, "deleteMerchantDocumentPermanent", e.getMessage());
+        });
   }
 
   @Override
-  public Future<ApiResponse<Boolean>> restoreAllMerchantDocument() {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.restoreAllMerchantDocument");
+  public Future<Void> restoreAllMerchantDocument() {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.restoreAllMerchantDocument");
     return repo.restoreAllMerchantDocuments()
-        .map(success -> ApiResponse.success("All merchant documents restored successfully", success))
-        .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "restoreAllMerchantDocument", "Success"))
-        .onFailure(e -> tracingMetrics.completeSpanError(ctx, "restoreAllMerchantDocument", e.getMessage()));
+        .compose(count -> {
+          if (count == 0) {
+            return Future.<Void>failedFuture(new NotFoundException("No trashed merchant documents found"));
+          }
+          return invalidateListCache();
+        })
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "restoreAllMerchantDocument", "Success"))
+        .onFailure(e -> {
+          logger.error("Failed to restore all merchant documents", e);
+          tracingMetrics.completeSpanError(ctx, "restoreAllMerchantDocument", e.getMessage());
+        });
   }
 
   @Override
-  public Future<ApiResponse<Boolean>> deleteAllMerchantDocumentPermanent() {
-    TracingMetrics.TracingContext ctx = tracingMetrics
-        .startSpan("MerchantDocumentCommandService.deleteAllMerchantDocumentPermanent");
+  public Future<Void> deleteAllMerchantDocumentPermanent() {
+    var ctx = tracingMetrics.startSpan("MerchantDocumentCommandService.deleteAllMerchantDocumentPermanent");
     return repo.deleteAllMerchantDocumentsPermanent()
-        .map(success -> ApiResponse.success("All merchant documents deleted permanently", success))
-        .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "deleteAllMerchantDocumentPermanent", "Success"))
-        .onFailure(e -> tracingMetrics.completeSpanError(ctx, "deleteAllMerchantDocumentPermanent", e.getMessage()));
+        .compose(count -> {
+          if (count == 0) {
+            return Future.<Void>failedFuture(new NotFoundException("No trashed merchant documents found"));
+          }
+          return invalidateListCache();
+        })
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "deleteAllMerchantDocumentPermanent", "Success"))
+        .onFailure(e -> {
+          logger.error("Failed to permanently delete all merchant documents", e);
+          tracingMetrics.completeSpanError(ctx, "deleteAllMerchantDocumentPermanent", e.getMessage());
+        });
   }
 }

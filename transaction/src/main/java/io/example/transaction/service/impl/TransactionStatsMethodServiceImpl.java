@@ -2,118 +2,137 @@ package io.example.transaction.service.impl;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.example.transaction.domain.requests.YearCardNumberTransactionRequest;
+import io.example.transaction.domain.requests.YearTransactionRequest;
 import io.example.transaction.model.TransactionStats;
 import io.example.transaction.repository.TransactionStatsMethodRepository;
 import io.example.transaction.service.TransactionStatsMethodService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
-import pb.transaction.Transaction.FindByYearCardNumberTransactionRequest;
-import pb.transaction.Transaction.FindYearTransactionStatus;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransactionStatsMethodServiceImpl implements TransactionStatsMethodService {
   private final TransactionStatsMethodRepository repository;
   private final RedisService redis;
   private final TracingMetrics metrics;
+  private static final ObjectMapper mapper = new ObjectMapper();
 
   private static final String CACHE_PREFIX = "transaction:stats:method:";
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-  public TransactionStatsMethodServiceImpl(
-      TransactionStatsMethodRepository repository,
-      RedisService redis,
-      TracingMetrics metrics) {
-    this.repository = repository;
-    this.redis = redis;
-    this.metrics = metrics;
-  }
-
   @Override
-  public Future<List<TransactionStats.MonthMethod>> getMonthlyMethods(FindYearTransactionStatus request) {
-    String cacheKey = CACHE_PREFIX + "monthly:" + request.getYear();
+  public Future<List<TransactionStats.MonthMethod>> getMonthlyMethods(YearTransactionRequest req) {
+    String cacheKey = CACHE_PREFIX + "monthly:" + req.getYear();
     var ctx = metrics.startSpan("TransactionStatsMethodService.getMonthlyMethods");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TransactionStats.MonthMethod> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TransactionStats.MonthMethod.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getMonthlyMethods", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TransactionStats.MonthMethod>>() {
+              });
+              return Future.<List<TransactionStats.MonthMethod>>succeededFuture(list);
+            } catch (Exception e) {
+            }
           }
-          return repository.getMonthlyMethods(request)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyMethods", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyMethods", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TransactionStats.MonthMethod>> fromDb = repository.getMonthlyMethods(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyMethods", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyMethods", e.getMessage()));
   }
 
   @Override
-  public Future<List<TransactionStats.YearMethod>> getYearlyMethods(FindYearTransactionStatus request) {
-    String cacheKey = CACHE_PREFIX + "yearly:" + request.getYear();
+  public Future<List<TransactionStats.YearMethod>> getYearlyMethods(YearTransactionRequest req) {
+    String cacheKey = CACHE_PREFIX + "yearly:" + req.getYear();
     var ctx = metrics.startSpan("TransactionStatsMethodService.getYearlyMethods");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TransactionStats.YearMethod> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TransactionStats.YearMethod.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getYearlyMethods", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TransactionStats.YearMethod>>() {
+              });
+              return Future.<List<TransactionStats.YearMethod>>succeededFuture(list);
+            } catch (Exception e) {
+            }
           }
-          return repository.getYearlyMethods(request)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyMethods", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyMethods", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TransactionStats.YearMethod>> fromDb = repository.getYearlyMethods(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyMethods", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyMethods", e.getMessage()));
   }
 
   @Override
-  public Future<List<TransactionStats.MonthMethod>> getMonthlyMethodsByCard(
-      FindByYearCardNumberTransactionRequest request) {
-    String cacheKey = CACHE_PREFIX + "monthly:card:" + request.getCardNumber() + ":" + request.getYear();
+  public Future<List<TransactionStats.MonthMethod>> getMonthlyMethodsByCard(YearCardNumberTransactionRequest req) {
+    String cacheKey = CACHE_PREFIX + "monthly:card:" + req.getCardNumber() + ":" + req.getYear();
     var ctx = metrics.startSpan("TransactionStatsMethodService.getMonthlyMethodsByCard");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TransactionStats.MonthMethod> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TransactionStats.MonthMethod.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getMonthlyMethodsByCard", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TransactionStats.MonthMethod>>() {
+              });
+              return Future.<List<TransactionStats.MonthMethod>>succeededFuture(list);
+            } catch (Exception e) {
+            }
           }
-          return repository.getMonthlyMethodsByCard(request)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyMethodsByCard", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyMethodsByCard", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TransactionStats.MonthMethod>> fromDb = repository.getMonthlyMethodsByCard(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyMethodsByCard", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyMethodsByCard", e.getMessage()));
   }
 
   @Override
-  public Future<List<TransactionStats.YearMethod>> getYearlyMethodsByCard(
-      FindByYearCardNumberTransactionRequest request) {
-    String cacheKey = CACHE_PREFIX + "yearly:card:" + request.getCardNumber() + ":" + request.getYear();
+  public Future<List<TransactionStats.YearMethod>> getYearlyMethodsByCard(YearCardNumberTransactionRequest req) {
+    String cacheKey = CACHE_PREFIX + "yearly:card:" + req.getCardNumber() + ":" + req.getYear();
     var ctx = metrics.startSpan("TransactionStatsMethodService.getYearlyMethodsByCard");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TransactionStats.YearMethod> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TransactionStats.YearMethod.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getYearlyMethodsByCard", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TransactionStats.YearMethod>>() {
+              });
+              return Future.<List<TransactionStats.YearMethod>>succeededFuture(list);
+            } catch (Exception e) {
+            }
           }
-          return repository.getYearlyMethodsByCard(request)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyMethodsByCard", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyMethodsByCard", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TransactionStats.YearMethod>> fromDb = repository.getYearlyMethodsByCard(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyMethodsByCard", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyMethodsByCard", e.getMessage()));
   }
 }

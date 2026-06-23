@@ -10,13 +10,11 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransferStatsAmountRepositoryImpl implements TransferStatsAmountRepository {
   private final Pool pool;
-
-  public TransferStatsAmountRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
@@ -38,7 +36,8 @@ public class TransferStatsAmountRepositoryImpl implements TransferStatsAmountRep
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(year)))
         .map(rows -> {
           List<TransferStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(TransferStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(TransferStats.MonthAmount.fromRow(r));
           return list;
         });
   }
@@ -55,7 +54,8 @@ public class TransferStatsAmountRepositoryImpl implements TransferStatsAmountRep
     return pool.preparedQuery(sql).execute(Tuple.of(endYear))
         .map(rows -> {
           List<TransferStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(TransferStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(TransferStats.YearAmount.fromRow(r));
           return list;
         });
   }

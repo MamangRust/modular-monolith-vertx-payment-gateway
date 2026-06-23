@@ -1,114 +1,120 @@
 package io.example.topup.handler;
 
-import io.example.common.model.PaginationMeta;
+import io.example.common.grpc.GrpcExceptionMapper;
+import io.example.topup.domain.requests.topup.FindAllTopups;
+import io.example.topup.domain.requests.topup.FindAllTopupsByCardNumber;
 import io.example.topup.service.TopupQueryService;
 import io.vertx.core.Future;
-import pb.topup.Topup.*;
-import pb.topup.TopupQuery.*;
+import lombok.RequiredArgsConstructor;
+import pb.topup.Topup.ApiResponseTopup;
+import pb.topup.Topup.FindByCardNumberTopupRequest;
+import pb.topup.Topup.FindByIdTopupRequest;
+import pb.topup.TopupQuery.ApiResponsePaginationTopup;
+import pb.topup.TopupQuery.ApiResponsePaginationTopupDeleteAt;
+import pb.topup.TopupQuery.FindAllTopupByCardNumberRequest;
+import pb.topup.TopupQuery.FindAllTopupRequest;
 
+@RequiredArgsConstructor
 public class TopupQueryHandler implements pb.topup.VertxTopupQueryServiceGrpcServer.TopupQueryServiceApi {
   private final TopupQueryService service;
 
-  public TopupQueryHandler(TopupQueryService service) {
-    this.service = service;
+  private pb.common.PaginationMeta toMeta(int totalRecords, int page, int pageSize) {
+    int currentPage = page > 0 ? page : 1;
+    int size = pageSize > 0 ? pageSize : 10;
+    int totalPages = size > 0 ? (int) Math.ceil((double) totalRecords / size) : 0;
+    return pb.common.PaginationMeta.newBuilder()
+        .setCurrentPage(currentPage)
+        .setPageSize(size)
+        .setTotalPages(totalPages)
+        .setTotalRecords(totalRecords)
+        .build();
   }
 
-  private pb.common.PaginationMeta toMeta(PaginationMeta meta) {
-    if (meta == null)
-      return pb.common.PaginationMeta.getDefaultInstance();
-    return pb.common.PaginationMeta.newBuilder()
-        .setCurrentPage(meta.currentPage())
-        .setPageSize(meta.pageSize())
-        .setTotalPages(meta.totalPages())
-        .setTotalRecords(meta.totalRecords())
+  private FindAllTopups toDomainReq(FindAllTopupRequest req) {
+    return FindAllTopups.builder()
+        .search(req.getSearch())
+        .page(req.getPage() > 0 ? req.getPage() : 1)
+        .pageSize(req.getPageSize() > 0 ? req.getPageSize() : 10)
         .build();
   }
 
   @Override
   public Future<ApiResponsePaginationTopup> findAllTopup(FindAllTopupRequest req) {
-    return service.getTopups(req)
+    var domainReq = toDomainReq(req);
+    return service.getTopups(domainReq)
         .map(resp -> ApiResponsePaginationTopup.newBuilder()
-            .setStatus(resp.status())
-            .setMessage(resp.message())
-            .addAllData(resp.data().stream().map(ProtoConverter::fromTopupResponse).toList())
-            .setPaginationMeta(toMeta(resp.pagination()))
-            .build());
+            .setStatus("success")
+            .setMessage("OK")
+            .addAllData(resp.getData().stream().map(ProtoConverter::fromTopupResponse).toList())
+            .setPaginationMeta(toMeta(resp.getTotalRecords(), domainReq.getPage(), domainReq.getPageSize()))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponsePaginationTopup> findAllTopupByCardNumber(FindAllTopupByCardNumberRequest req) {
-    // FindAllTopupByCardNumber is not explicitly in TopupQueryService, I'll add it
-    // or map it.
-    // For now I'll use getTopups with search = cardNumber.
-    FindAllTopupRequest queryReq = FindAllTopupRequest.newBuilder()
-        .setPage(req.getPage())
-        .setPageSize(req.getPageSize())
-        .setSearch(req.getCardNumber())
+    var domainReq = FindAllTopupsByCardNumber.builder()
+        .cardNumber(req.getCardNumber())
+        .search(req.getSearch())
+        .page(req.getPage() > 0 ? req.getPage() : 1)
+        .pageSize(req.getPageSize() > 0 ? req.getPageSize() : 10)
         .build();
-    return service.getTopups(queryReq)
+
+    return service.getTopupsByCardNumber(domainReq)
         .map(resp -> ApiResponsePaginationTopup.newBuilder()
-            .setStatus(resp.status())
-            .setMessage(resp.message())
-            .addAllData(resp.data().stream().map(ProtoConverter::fromTopupResponse).toList())
-            .setPaginationMeta(toMeta(resp.pagination()))
-            .build());
+            .setStatus("success")
+            .setMessage("OK")
+            .addAllData(resp.getData().stream().map(ProtoConverter::fromTopupResponse).toList())
+            .setPaginationMeta(toMeta(resp.getTotalRecords(), domainReq.getPage(), domainReq.getPageSize()))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseTopup> findByIdTopup(FindByIdTopupRequest req) {
     return service.getTopupById(req.getTopupId())
-        .map(resp -> {
-          var builder = ApiResponseTopup.newBuilder()
-              .setStatus(resp.status())
-              .setMessage(resp.message());
-          if (resp.data() != null) {
-            builder.setData(ProtoConverter.fromTopupResponse(resp.data()));
-          }
-          return builder.build();
-        });
+        .map(data -> ApiResponseTopup.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.fromTopupResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseTopup> findByCardNumberTopup(FindByCardNumberTopupRequest req) {
-    // Use getTopups with limit 1
-    FindAllTopupRequest queryReq = FindAllTopupRequest.newBuilder()
-        .setPage(1)
-        .setPageSize(1)
-        .setSearch(req.getCardNumber())
-        .build();
-    return service.getTopups(queryReq)
-        .map(resp -> {
-          var builder = ApiResponseTopup.newBuilder()
-              .setStatus(resp.status());
-          if (resp.data().isEmpty()) {
-            builder.setMessage("Topup not found for card");
-          } else {
-            builder.setMessage(resp.message());
-            builder.setData(ProtoConverter.fromTopupResponse(resp.data().get(0)));
-          }
-          return builder.build();
-        });
+    return service.getTopupByCardNumber(req.getCardNumber())
+        .map(data -> ApiResponseTopup.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.fromTopupResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponsePaginationTopupDeleteAt> findByActive(FindAllTopupRequest req) {
-    return service.getActiveTopups(req)
-        .map(resp -> ApiResponsePaginationTopupDeleteAt.newBuilder()
-            .setStatus(resp.status())
-            .setMessage(resp.message())
-            .addAllData(resp.data().stream().map(ProtoConverter::fromTopupResponseToProtoDeleteAt).toList())
-            .setPaginationMeta(toMeta(resp.pagination()))
-            .build());
+    var domainReq = toDomainReq(req);
+    return service.getActiveTopups(domainReq)
+        .<ApiResponsePaginationTopupDeleteAt>map(resp -> ApiResponsePaginationTopupDeleteAt.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .addAllData(resp.getData().stream().map(ProtoConverter::fromTopupResponseDeleteAt).toList())
+            .setPaginationMeta(toMeta(resp.getTotalRecords(), domainReq.getPage(), domainReq.getPageSize()))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponsePaginationTopupDeleteAt> findByTrashed(FindAllTopupRequest req) {
-    return service.getTrashedTopups(req)
+    var domainReq = toDomainReq(req);
+    return service.getTrashedTopups(domainReq)
         .map(resp -> ApiResponsePaginationTopupDeleteAt.newBuilder()
-            .setStatus(resp.status())
-            .setMessage(resp.message())
-            .addAllData(resp.data().stream().map(ProtoConverter::fromTopupResponseDeleteAt).toList())
-            .setPaginationMeta(toMeta(resp.pagination()))
-            .build());
+            .setStatus("success")
+            .setMessage("OK")
+            .addAllData(resp.getData().stream().map(ProtoConverter::fromTopupResponseDeleteAt).toList())
+            .setPaginationMeta(toMeta(resp.getTotalRecords(), domainReq.getPage(), domainReq.getPageSize()))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 }

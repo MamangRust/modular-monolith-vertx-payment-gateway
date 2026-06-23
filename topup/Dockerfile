@@ -17,14 +17,17 @@ COPY transaction/pom.xml transaction/
 COPY transfer/pom.xml transfer/
 COPY user/pom.xml user/
 COPY withdraw/pom.xml withdraw/
+COPY db-migration/pom.xml db-migration/
 COPY common/src common/src
 COPY topup/src topup/src
+COPY chaos.yaml chaos.yaml
 
-RUN mvn clean package -pl topup -am -DskipTests -q
+RUN --mount=type=cache,target=/root/.m2 mvn clean package -pl topup -am -DskipTests -q -Dmaven.wagon.http.retryHandler.count=5
 
 # ---- Runtime Stage ----
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=build /app/topup/target/topup-*-fat.jar app.jar
+COPY chaos.yaml .
 EXPOSE 50057
 ENTRYPOINT ["java", "-jar", "app.jar"]

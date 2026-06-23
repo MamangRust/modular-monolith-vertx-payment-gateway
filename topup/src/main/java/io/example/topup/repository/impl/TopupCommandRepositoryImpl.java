@@ -7,18 +7,15 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
-
+import lombok.RequiredArgsConstructor;
 import io.example.topup.domain.requests.topup.CreateTopupRequest;
 import io.example.topup.domain.requests.topup.UpdateTopupAmount;
 import io.example.topup.domain.requests.topup.UpdateTopupRequest;
 import io.example.topup.domain.requests.topup.UpdateTopupStatus;
 
+@RequiredArgsConstructor
 public class TopupCommandRepositoryImpl implements TopupCommandRepository {
   private final Pool pool;
-
-  public TopupCommandRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   @Override
   public Future<Topup> createTopup(CreateTopupRequest req) {
@@ -56,30 +53,31 @@ public class TopupCommandRepositoryImpl implements TopupCommandRepository {
   }
 
   @Override
-  public Future<Topup> trashTopup(int id) {
+  public Future<Topup> trashTopup(Integer id) {
     String sql = "UPDATE topups SET deleted_at = CURRENT_TIMESTAMP WHERE topup_id = $1 AND deleted_at IS NULL RETURNING *";
     return pool.preparedQuery(sql).execute(Tuple.of(id)).map(this::mapSingleOrNull);
   }
 
   @Override
-  public Future<Topup> restoreTopup(int id) {
+  public Future<Topup> restoreTopup(Integer id) {
     String sql = "UPDATE topups SET deleted_at = NULL WHERE topup_id = $1 AND deleted_at IS NOT NULL RETURNING *";
     return pool.preparedQuery(sql).execute(Tuple.of(id)).map(this::mapSingleOrNull);
   }
 
   @Override
-  public Future<Void> deleteTopupPermanently(int id) {
-    return pool.preparedQuery("DELETE FROM topups WHERE topup_id = $1").execute(Tuple.of(id)).mapEmpty();
+  public Future<Boolean> deleteTopupPermanently(Integer id) {
+    return pool.preparedQuery("DELETE FROM topups WHERE topup_id = $1").execute(Tuple.of(id)).map(rows -> true);
   }
 
   @Override
-  public Future<Void> restoreAllTopups() {
-    return pool.query("UPDATE topups SET deleted_at = NULL WHERE deleted_at IS NOT NULL").execute().mapEmpty();
+  public Future<Integer> restoreAllTopups() {
+    return pool.query("UPDATE topups SET deleted_at = NULL WHERE deleted_at IS NOT NULL").execute()
+        .map(rows -> rows.rowCount());
   }
 
   @Override
-  public Future<Void> deleteAllPermanentTopups() {
-    return pool.query("DELETE FROM topups WHERE deleted_at IS NOT NULL").execute().mapEmpty();
+  public Future<Integer> deleteAllPermanentTopups() {
+    return pool.query("DELETE FROM topups WHERE deleted_at IS NOT NULL").execute().map(rows -> rows.rowCount());
   }
 
   private Topup mapSingleOrNull(RowSet<Row> rows) {

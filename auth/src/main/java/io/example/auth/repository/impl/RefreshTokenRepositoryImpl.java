@@ -5,15 +5,13 @@ import io.example.auth.repository.RefreshTokenRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
 import java.time.LocalDateTime;
 
+@RequiredArgsConstructor
 public class RefreshTokenRepositoryImpl implements RefreshTokenRepository {
     private final Pool pool;
-
-    public RefreshTokenRepositoryImpl(Pool pool) {
-        this.pool = pool;
-    }
 
     @Override
     public Future<RefreshToken> findByToken(String token) {

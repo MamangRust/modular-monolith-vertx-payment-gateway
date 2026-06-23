@@ -4,26 +4,27 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+
+import io.example.merchant.domain.requests.merchant.MonthYearAmountApiKey;
 import io.example.merchant.model.MerchantStats;
 import io.example.merchant.repository.MerchantStatsAmountByApiKeyRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsAmountByApiKeyRepositoryImpl implements MerchantStatsAmountByApiKeyRepository {
   private final Pool pool;
-
-  public MerchantStatsAmountByApiKeyRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
   }
 
   @Override
-  public Future<List<MerchantStats.MonthAmount>> getMonthlyAmountByApikey(pb.merchant.Merchant.FindYearMerchantByApikey req) {
+  public Future<List<MerchantStats.MonthAmount>> getMonthlyAmountByApikey(
+      MonthYearAmountApiKey req) {
     String sql = """
         WITH months AS (
             SELECT generate_series(
@@ -36,24 +37,26 @@ public class MerchantStatsAmountByApiKeyRepositoryImpl implements MerchantStatsA
             AND EXTRACT(YEAR FROM t.transaction_time) = EXTRACT(YEAR FROM m.month)
             AND t.deleted_at IS NULL
             AND EXISTS (
-                SELECT 1 FROM merchants mch 
-                WHERE mch.merchant_id = t.merchant_id 
-                AND mch.deleted_at IS NULL 
+                SELECT 1 FROM merchants mch
+                WHERE mch.merchant_id = t.merchant_id
+                AND mch.deleted_at IS NULL
                 AND mch.api_key = $2
             )
         GROUP BY m.month
         ORDER BY m.month
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(req.getYear()), req.getApiKey()))
+    return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(req.getYear()), req.getApikey()))
         .map(rows -> {
           List<MerchantStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.MonthAmount.fromRow(r));
           return list;
         });
   }
 
   @Override
-  public Future<List<MerchantStats.YearAmount>> getYearlyAmountByApikey(pb.merchant.Merchant.FindYearMerchantByApikey req) {
+  public Future<List<MerchantStats.YearAmount>> getYearlyAmountByApikey(
+      MonthYearAmountApiKey req) {
     String sql = """
         WITH last_five_years AS (
             SELECT EXTRACT(YEAR FROM t.transaction_time) AS year, SUM(t.amount) AS amount
@@ -65,14 +68,15 @@ public class MerchantStatsAmountByApiKeyRepositoryImpl implements MerchantStatsA
               AND EXTRACT(YEAR FROM t.transaction_time) <= $1::int
             GROUP BY EXTRACT(YEAR FROM t.transaction_time)
         )
-        SELECT year::text, COALESCE(amount, 0)::bigint AS amount 
-        FROM last_five_years 
+        SELECT year::text, COALESCE(amount, 0)::bigint AS amount
+        FROM last_five_years
         ORDER BY year
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(req.getYear(), req.getApiKey()))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getYear(), req.getApikey()))
         .map(rows -> {
           List<MerchantStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.YearAmount.fromRow(r));
           return list;
         });
   }

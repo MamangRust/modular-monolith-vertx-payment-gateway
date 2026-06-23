@@ -1,16 +1,25 @@
 package io.example.auth;
 
+import java.util.HashMap;
+import java.util.Map;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import io.example.auth.handler.AuthHandler;
-import io.example.auth.repository.AuthCommandRepository;
-import io.example.auth.repository.AuthQueryRepository;
 import io.example.auth.repository.Repositories;
-import io.example.auth.service.*;
+import io.example.auth.service.IdentityService;
+import io.example.auth.service.LoginService;
+import io.example.auth.service.PasswordResetService;
+import io.example.auth.service.RegisterService;
+import io.example.auth.service.TokenService;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
-import io.example.common.service.RedisService;
 import io.example.common.observability.TracingMetrics;
-
+import io.example.common.service.RedisService;
 import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
@@ -28,12 +37,6 @@ import io.vertx.redis.client.RedisAPI;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.PoolOptions;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.HashMap;
-import java.util.Map;
-
 public class AuthVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(AuthVerticle.class);
 
@@ -45,11 +48,11 @@ public class AuthVerticle extends AbstractVerticle {
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8083)
         .put("service.name", "auth-service")
@@ -96,11 +99,12 @@ public class AuthVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
-    // Initialize New Repositories
-    Repositories repositories = new Repositories(pool);
+    ChaosManager chaosManager = new ChaosManager();
+    chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
 
-    var queryRepo = new AuthQueryRepository(pool);
-    var cmdRepo = new AuthCommandRepository(pool);
+    // Initialize New Repositories
+    Repositories repositories = new Repositories(chaosPool);
 
     // Initialize Kafka Service
     Map<String, String> kafkaConfig = new HashMap<>();
@@ -123,7 +127,6 @@ public class AuthVerticle extends AbstractVerticle {
 
     // 4. Initialize Services
     TokenService tokenService = new TokenService(jwtProvider);
-    var commandService = new AuthCommandService(cmdRepo, queryRepo, redisService, jwtProvider, tracingMetrics);
     var registerService = new RegisterService(
         repositories.getUser(),
         repositories.getRole(),
@@ -151,7 +154,7 @@ public class AuthVerticle extends AbstractVerticle {
         tracingMetrics);
 
     // 5. Initialize Unified Handler
-    AuthHandler handler = new AuthHandler(commandService, registerService, identityService, passwordResetService,
+    AuthHandler handler = new AuthHandler(registerService, identityService, passwordResetService,
         loginService);
 
     int port = cfg.getGrpcPort();

@@ -1,21 +1,17 @@
 package io.example.transaction.repository;
 
-import io.example.common.exception.NotFoundException;
+import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.saldo.Saldo.ApiResponseSaldo;
 import pb.saldo.SaldoCommand.UpdateSaldoBalanceRequest;
 import pb.saldo.VertxSaldoCommandServiceGrpcClient;
 import pb.saldo.VertxSaldoQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class SaldoClientRepository {
   private final VertxSaldoQueryServiceGrpcClient queryStub;
   private final VertxSaldoCommandServiceGrpcClient commandStub;
-
-  public SaldoClientRepository(VertxSaldoQueryServiceGrpcClient queryStub,
-      VertxSaldoCommandServiceGrpcClient commandStub) {
-    this.queryStub = queryStub;
-    this.commandStub = commandStub;
-  }
 
   public Future<ApiResponseSaldo> getSaldoByCardNumber(String cardNumber) {
     return queryStub

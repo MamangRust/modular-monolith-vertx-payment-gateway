@@ -11,14 +11,12 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 import io.example.saldo.domain.requests.MonthTotalSaldoBalance;
 
+@RequiredArgsConstructor
 public class SaldoStatsTotalRepositoryImpl implements SaldoStatsTotalRepository {
   private final Pool client;
-
-  public SaldoStatsTotalRepositoryImpl(Pool client) {
-    this.client = client;
-  }
 
   @Override
   public Future<List<SaldoStats.MonthTotalBalance>> getMonthlyTotalSaldoBalance(MonthTotalSaldoBalance req) {

@@ -6,11 +6,11 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.example.common.model.ApiResponse;
-import io.example.common.model.ApiResponsePagination;
-import io.example.common.model.PaginationMeta;
+import io.example.common.domain.PagedResult;
+import io.example.common.exception.api.NotFoundException;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.example.user.domain.requests.FindAllUsers;
 import io.example.user.model.User;
 import io.example.user.model.UserResponse;
 import io.example.user.model.UserResponseDeleteAt;
@@ -18,12 +18,14 @@ import io.example.user.repository.UserQueryRepository;
 import io.example.user.service.UserQueryService;
 import io.opentelemetry.api.common.Attributes;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonObject;
-import pb.user.User.FindAllUserRequest;
-import pb.user.User.FindByIdUserRequest;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class UserQueryServiceImpl implements UserQueryService {
   private static final Logger log = LoggerFactory.getLogger(UserQueryServiceImpl.class);
+  private static final ObjectMapper mapper = new ObjectMapper();
   private final UserQueryRepository repository;
   private final RedisService redis;
   private final TracingMetrics metrics;
@@ -31,151 +33,108 @@ public class UserQueryServiceImpl implements UserQueryService {
   private static final String CACHE_PREFIX = "user:";
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-  public UserQueryServiceImpl(UserQueryRepository repository, RedisService redis, TracingMetrics metrics) {
-    this.repository = repository;
-    this.redis = redis;
-    this.metrics = metrics;
+  private PagedResult<UserResponse> mapPagination(PagedResult<User> res) {
+    List<UserResponse> data = res.getData().stream().map(UserResponse::from).toList();
+    return new PagedResult<>(data, res.getTotalRecords());
+  }
+
+  private PagedResult<UserResponseDeleteAt> mapPaginationDeleteAt(PagedResult<User> res) {
+    List<UserResponseDeleteAt> data = res.getData().stream().map(UserResponseDeleteAt::from).toList();
+    return new PagedResult<>(data, res.getTotalRecords());
   }
 
   @Override
-  public Future<ApiResponsePagination<List<UserResponse>>> getUsers(FindAllUserRequest req) {
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String search = req.getSearch();
-
-    String cacheKey = CACHE_PREFIX + "list:all:" + (search != null ? search : "") + ":" + page + ":" + pageSize;
+  public Future<PagedResult<UserResponse>> getUsers(FindAllUsers req) {
     var ctx = metrics.startSpan("UserQueryService.getUsers");
+    String cacheKey = CACHE_PREFIX + "list:all:" + (req.getSearch() != null ? req.getSearch() : "") + ":"
+        + req.getPage() + ":" + req.getPageSize();
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            JsonObject json = new JsonObject(cached);
-            List<UserResponse> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(UserResponse.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            metrics.completeSpanSuccess(ctx, "getUsers", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Users fetched successfully (from cache)", data, meta));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              PagedResult<User> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<User>>() {});
+              return Future.succeededFuture(mapPagination(typedCached));
+            } catch (Exception e) {
+              log.warn("Failed to deserialize cached users: {}", e.getMessage());
+            }
           }
-          return repository.getUsers(search, page, pageSize)
-              .map(res -> {
-                ApiResponsePagination<List<UserResponse>> response = mapPagination(res, page, pageSize);
-                redis.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL);
-                return response;
-              });
+          return repository.getUsers(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res))
+              .map(this::mapPagination);
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getUsers", "Success"))
-        .onFailure(e -> metrics.completeSpanError(ctx, "getUsers", e.getMessage()))
-        .recover(e -> Future.succeededFuture(ApiResponsePagination.error(e.getMessage())));
+        .onFailure(e -> metrics.completeSpanError(ctx, "getUsers", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<UserResponseDeleteAt>>> getActiveUsers(FindAllUserRequest req) {
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String search = req.getSearch();
-
-    String cacheKey = CACHE_PREFIX + "list:active:" + (search != null ? search : "") + ":" + page + ":" + pageSize;
+  public Future<PagedResult<UserResponseDeleteAt>> getActiveUsers(FindAllUsers req) {
     var ctx = metrics.startSpan("UserQueryService.getActiveUsers");
+    String cacheKey = CACHE_PREFIX + "list:active:" + (req.getSearch() != null ? req.getSearch() : "") + ":"
+        + req.getPage() + ":" + req.getPageSize();
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            JsonObject json = new JsonObject(cached);
-            List<UserResponseDeleteAt> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(UserResponseDeleteAt.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            metrics.completeSpanSuccess(ctx, "getActiveUsers", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Active users fetched successfully (from cache)", data, meta));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              PagedResult<User> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<User>>() {});
+              return Future.succeededFuture(mapPaginationDeleteAt(typedCached));
+            } catch (Exception e) {
+              log.warn("Failed to deserialize cached active users: {}", e.getMessage());
+            }
           }
-          return repository.getActiveUsers(search, page, pageSize)
-              .map(res -> {
-                ApiResponsePagination<List<UserResponseDeleteAt>> response = mapPaginationDeleteAt(res, page, pageSize);
-                redis.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL);
-                return response;
-              });
+          return repository.getActiveUsers(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res))
+              .map(this::mapPaginationDeleteAt);
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getActiveUsers", "Success"))
-        .onFailure(e -> metrics.completeSpanError(ctx, "getActiveUsers", e.getMessage()))
-        .recover(e -> Future.succeededFuture(ApiResponsePagination.error(e.getMessage())));
+        .onFailure(e -> metrics.completeSpanError(ctx, "getActiveUsers", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<UserResponseDeleteAt>>> getTrashedUsers(FindAllUserRequest req) {
-    int page = req.getPage() > 0 ? req.getPage() : 1;
-    int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-    String search = req.getSearch();
-
-    String cacheKey = CACHE_PREFIX + "list:trashed:" + (search != null ? search : "") + ":" + page + ":" + pageSize;
+  public Future<PagedResult<UserResponseDeleteAt>> getTrashedUsers(FindAllUsers req) {
     var ctx = metrics.startSpan("UserQueryService.getTrashedUsers");
+    String cacheKey = CACHE_PREFIX + "list:trashed:" + (req.getSearch() != null ? req.getSearch() : "") + ":"
+        + req.getPage() + ":" + req.getPageSize();
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            JsonObject json = new JsonObject(cached);
-            List<UserResponseDeleteAt> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(UserResponseDeleteAt.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            metrics.completeSpanSuccess(ctx, "getTrashedUsers", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Trashed users fetched successfully (from cache)", data, meta));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              PagedResult<User> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<User>>() {});
+              return Future.succeededFuture(mapPaginationDeleteAt(typedCached));
+            } catch (Exception e) {
+              log.warn("Failed to deserialize cached trashed users: {}", e.getMessage());
+            }
           }
-          return repository.getTrashedUsers(search, page, pageSize)
-              .map(res -> {
-                ApiResponsePagination<List<UserResponseDeleteAt>> response = mapPaginationDeleteAt(res, page, pageSize);
-                redis.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL);
-                return response;
-              });
+          return repository.getTrashedUsers(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res))
+              .map(this::mapPaginationDeleteAt);
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getTrashedUsers", "Success"))
-        .onFailure(e -> metrics.completeSpanError(ctx, "getTrashedUsers", e.getMessage()))
-        .recover(e -> Future.succeededFuture(ApiResponsePagination.error(e.getMessage())));
+        .onFailure(e -> metrics.completeSpanError(ctx, "getTrashedUsers", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<UserResponse>> getUserById(FindByIdUserRequest req) {
-    Integer id = req.getId();
+  public Future<UserResponse> getUserById(Integer id) {
     var ctx = metrics.startSpan("UserQueryService.getUserById", Attributes.builder().put("user.id", (long) id).build());
     String key = CACHE_PREFIX + id;
 
-    return redis.get(key)
+    return redis.getJson(key, User.class)
         .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            try {
-              User user = User.fromJson(new JsonObject(cached));
-              metrics.completeSpanSuccess(ctx, "getUserById", "Success (from cache)");
-              return Future.succeededFuture(
-                  ApiResponse.success("User fetched successfully (from cache)", UserResponse.from(user)));
-            } catch (Exception ex) {
-              log.warn("Failed parsing cached user {}", id, ex);
-            }
+          if (cached != null) {
+            return Future.succeededFuture(UserResponse.from(cached));
           }
           return repository.getUserById(id)
               .compose(db -> {
-                if (db == null)
-                  return Future.failedFuture("User not found");
-                redis.setJson(key, db.toJson(), CACHE_TTL);
-                return Future.succeededFuture(ApiResponse.success("User fetched successfully", UserResponse.from(db)));
-              });
+                if (db == null) {
+                  return Future.<User>failedFuture(new NotFoundException("User not found"));
+                }
+                return redis.setJson(key, db, CACHE_TTL).<User>map(v -> db);
+              })
+              .map(UserResponse::from);
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getUserById", "Success"))
-        .onFailure(e -> metrics.completeSpanError(ctx, "getUserById", e.getMessage()))
-        .recover(e -> Future.succeededFuture(ApiResponse.error(e.getMessage())));
-  }
-
-  private ApiResponsePagination<List<UserResponse>> mapPagination(io.example.common.domain.PagedResult<User> res,
-      int page, int pageSize) {
-    int totalRecords = res.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<UserResponse> data = res.getData().stream().map(UserResponse::from).toList();
-    return ApiResponsePagination.success("Users fetched successfully", data,
-        new PaginationMeta(page, pageSize, totalPages, totalRecords));
-  }
-
-  private ApiResponsePagination<List<UserResponseDeleteAt>> mapPaginationDeleteAt(
-      io.example.common.domain.PagedResult<User> res, int page, int pageSize) {
-    int totalRecords = res.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<UserResponseDeleteAt> data = res.getData().stream().map(UserResponseDeleteAt::from).toList();
-    return ApiResponsePagination.success("Users fetched successfully", data,
-        new PaginationMeta(page, pageSize, totalPages, totalRecords));
+        .onFailure(e -> metrics.completeSpanError(ctx, "getUserById", e.getMessage()));
   }
 }

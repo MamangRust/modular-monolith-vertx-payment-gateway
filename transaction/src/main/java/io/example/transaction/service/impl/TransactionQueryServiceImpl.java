@@ -8,10 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.example.common.domain.PagedResult;
-import io.example.common.exception.NotFoundException;
-import io.example.common.model.ApiResponse;
-import io.example.common.model.ApiResponsePagination;
-import io.example.common.model.PaginationMeta;
+import io.example.common.exception.api.NotFoundException;
+import io.example.common.domain.ApiResponse;
+import io.example.common.domain.ApiResponsePagination;
+import io.example.common.domain.PaginationMeta;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
 import io.example.transaction.domain.requests.FindAllTransactionCardNumber;
@@ -63,7 +63,8 @@ public class TransactionQueryServiceImpl implements TransactionQueryService {
                 .map(o -> ((JsonObject) o).mapTo(TransactionResponse.class)).toList();
             PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
             tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Transactions fetched successfully (from cache)", data, meta));
+            return Future.succeededFuture(
+                new ApiResponsePagination<>("success", "Transactions fetched successfully (from cache)", data, meta));
           }
 
           int page = req.getPage() > 0 ? req.getPage() : 1;
@@ -113,7 +114,8 @@ public class TransactionQueryServiceImpl implements TransactionQueryService {
                 .map(o -> ((JsonObject) o).mapTo(TransactionResponseDeleteAt.class)).toList();
             PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
             tracingMetrics.completeSpanSuccess(tracingContext, "get_active", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Active transactions fetched successfully (from cache)", data, meta));
+            return Future.succeededFuture(new ApiResponsePagination<>("success",
+                "Active transactions fetched successfully (from cache)", data, meta));
           }
 
           int page = req.getPage() > 0 ? req.getPage() : 1;
@@ -164,7 +166,8 @@ public class TransactionQueryServiceImpl implements TransactionQueryService {
                 .map(o -> ((JsonObject) o).mapTo(TransactionResponseDeleteAt.class)).toList();
             PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
             tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Trashed transactions fetched successfully (from cache)", data, meta));
+            return Future.succeededFuture(new ApiResponsePagination<>("success",
+                "Trashed transactions fetched successfully (from cache)", data, meta));
           }
 
           int page = req.getPage() > 0 ? req.getPage() : 1;
@@ -257,7 +260,8 @@ public class TransactionQueryServiceImpl implements TransactionQueryService {
                 .map(o -> ((JsonObject) o).mapTo(TransactionResponse.class)).toList();
             PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
             tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Transactions for card fetched successfully (from cache)", data, meta));
+            return Future.succeededFuture(new ApiResponsePagination<>("success",
+                "Transactions for card fetched successfully (from cache)", data, meta));
           }
 
           int page = req.getPage() > 0 ? req.getPage() : 1;

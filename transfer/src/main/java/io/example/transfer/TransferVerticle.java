@@ -3,6 +3,10 @@ package io.example.transfer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -30,8 +34,10 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.grpc.server.GrpcServer;
@@ -49,17 +55,18 @@ public class TransferVerticle extends AbstractVerticle {
   private TelemetryConfig telemetryConfig;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
+  private ChaosManager chaosManager;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8088)
         .put("card_service_host", "localhost")
@@ -109,11 +116,15 @@ public class TransferVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
-    var queryRepo = new TransferQueryRepositoryImpl(pool);
-    var cmdRepo = new TransferCommandRepositoryImpl(pool);
-    var statsAmountRepo = new TransferStatsAmountRepositoryImpl(pool);
-    var statsStatusRepo = new TransferStatsStatusRepositoryImpl(pool);
-    var statsByCardRepo = new TransferStatsByCardRepositoryImpl(pool);
+    this.chaosManager = new ChaosManager();
+    this.chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    var queryRepo = new TransferQueryRepositoryImpl(chaosPool);
+    var cmdRepo = new TransferCommandRepositoryImpl(chaosPool);
+    var statsAmountRepo = new TransferStatsAmountRepositoryImpl(chaosPool);
+    var statsStatusRepo = new TransferStatsStatusRepositoryImpl(chaosPool);
+    var statsByCardRepo = new TransferStatsByCardRepositoryImpl(chaosPool);
 
     // 3. Initialize gRPC Clients
     this.grpcClient = GrpcClient.client(vertx);
@@ -132,14 +143,15 @@ public class TransferVerticle extends AbstractVerticle {
         io.vertx.core.net.SocketAddress.inetSocketAddress(saldoPort, saldoHost));
     var saldoClientRepo = new SaldoClientRepository(saldoQueryStub, saldoCmdStub);
 
-    // 4. Initialize Redis & Kafka
+    // 4. Initialize Redis & Kafka (with chaos interceptor)
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
-    this.kafkaService = new KafkaService(KafkaConfig.createProducer(vertx));
+    this.kafkaService = new KafkaService(
+        ChaosKafkaInterceptor.wrap(KafkaConfig.createProducer(vertx), chaosManager, vertx));
 
     // 5. Construct Service Layer
     var queryService = new TransferQueryServiceImpl(queryRepo, redisService, tracingMetrics);
-    var cmdService = new TransferCommandServiceImpl(cmdRepo, cardClientRepo, saldoClientRepo, redisService,
+    var cmdService = new TransferCommandServiceImpl(cmdRepo, queryRepo, cardClientRepo, saldoClientRepo, redisService,
         tracingMetrics, kafkaService);
     var statsAmountService = new TransferStatsAmountServiceImpl(statsAmountRepo, redisService, tracingMetrics);
     var statsStatusService = new TransferStatsStatusServiceImpl(statsStatusRepo, redisService, tracingMetrics);
@@ -194,8 +206,11 @@ public class TransferVerticle extends AbstractVerticle {
     statsAmountHandler.bindAll(grpcServer);
     statsStatusHandler.bindAll(grpcServer);
 
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

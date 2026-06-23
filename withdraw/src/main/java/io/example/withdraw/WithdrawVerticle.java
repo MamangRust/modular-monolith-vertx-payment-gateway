@@ -3,6 +3,10 @@ package io.example.withdraw;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.KafkaConfig;
@@ -36,8 +40,10 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.grpc.server.GrpcServer;
@@ -62,11 +68,11 @@ public class WithdrawVerticle extends AbstractVerticle {
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8089)
         .put("card_service_host", "localhost")
@@ -116,10 +122,14 @@ public class WithdrawVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
-    WithdrawQueryRepository queryRepo = new WithdrawQueryRepositoryImpl(pool);
-    WithdrawCommandRepository cmdRepo = new WithdrawCommandRepositoryImpl(pool);
-    WithdrawStatsAmountRepository statsAmountRepo = new WithdrawStatsAmountRepositoryImpl(pool);
-    WithdrawStatsStatusRepository statsStatusRepo = new WithdrawStatsStatusRepositoryImpl(pool);
+    ChaosManager chaosManager = new ChaosManager();
+    chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
+    WithdrawQueryRepository queryRepo = new WithdrawQueryRepositoryImpl(chaosPool);
+    WithdrawCommandRepository cmdRepo = new WithdrawCommandRepositoryImpl(chaosPool);
+    WithdrawStatsAmountRepository statsAmountRepo = new WithdrawStatsAmountRepositoryImpl(chaosPool);
+    WithdrawStatsStatusRepository statsStatusRepo = new WithdrawStatsStatusRepositoryImpl(chaosPool);
 
     // 3. Initialize gRPC Clients
     this.grpcClient = GrpcClient.client(vertx);
@@ -143,7 +153,8 @@ public class WithdrawVerticle extends AbstractVerticle {
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
 
     KafkaProducer<String, String> kafkaProducer = KafkaConfig.createProducer(vertx);
-    this.kafkaService = new KafkaService(kafkaProducer);
+    KafkaProducer<String, String> chaosKafkaProducer = ChaosKafkaInterceptor.wrap(kafkaProducer, chaosManager, vertx);
+    this.kafkaService = new KafkaService(chaosKafkaProducer);
 
     // 5. Construct Service Layer
     WithdrawQueryService queryService = new WithdrawQueryServiceImpl(queryRepo, redisService, tracingMetrics);
@@ -162,7 +173,7 @@ public class WithdrawVerticle extends AbstractVerticle {
 
     int port = cfg.getGrpcPort();
 
-    startGrpcServer(queryHandler, cmdHandler, statsAmountHandler, statsStatusHandler, port)
+    startGrpcServer(queryHandler, cmdHandler, statsAmountHandler, statsStatusHandler, port, chaosManager)
         .onSuccess(v -> {
           log.info(
               "WithdrawVerticle fully initialized with Decoupled CQRS and gRPC Clients. Listening for gRPC on port {}",
@@ -194,7 +205,9 @@ public class WithdrawVerticle extends AbstractVerticle {
       WithdrawCommandHandler cmdHandler,
       WithdrawStatsAmountHandler statsAmountHandler,
       WithdrawStatsStatusHandler statsStatusHandler,
-      int grpcPort) {
+      int grpcPort,
+      ChaosManager chaosManager
+    ) {
     GrpcServer grpcServer = GrpcServer.server(vertx);
 
     queryHandler.bindAll(grpcServer);
@@ -202,8 +215,11 @@ public class WithdrawVerticle extends AbstractVerticle {
     statsAmountHandler.bindAll(grpcServer);
     statsStatusHandler.bindAll(grpcServer);
 
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

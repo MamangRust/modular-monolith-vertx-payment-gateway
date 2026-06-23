@@ -1,9 +1,10 @@
 package io.example.card.repository;
 
 import io.example.card.model.Card;
+import io.example.card.model.CardEmail;
 import io.example.common.domain.PagedResult;
 import io.vertx.core.Future;
-import pb.card.Card.FindAllCardRequest;;
+import pb.card.Card.FindAllCardRequest;
 
 public interface CardQueryRepository {
   Future<PagedResult<Card>> findAllCards(FindAllCardRequest request);
@@ -16,5 +17,9 @@ public interface CardQueryRepository {
 
   Future<Card> findByUserId(Integer userId);
 
+  Future<Card> findByTrashId(Integer cardId);
+
   Future<Card> findByCardNumber(String cardNumber);
+
+  Future<CardEmail> getCardEmailByCardNumber(String cardNumber);
 }

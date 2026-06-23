@@ -1,11 +1,13 @@
 package io.example.merchant.service;
 
 import java.util.List;
+
+import io.example.merchant.domain.requests.merchant.MonthYearTotalAmountMerchant;
 import io.example.merchant.model.MerchantStats;
 import io.vertx.core.Future;
-import pb.merchant.Merchant.FindYearMerchantById;
 
 public interface MerchantStatsTotalAmountByMerchantService {
-  Future<List<MerchantStats.MonthAmount>> getMonthlyTotalAmounts(FindYearMerchantById req);
-  Future<List<MerchantStats.YearAmount>> getYearlyTotalAmounts(FindYearMerchantById req);
+  Future<List<MerchantStats.MonthAmount>> getMonthlyTotalAmounts(MonthYearTotalAmountMerchant req);
+
+  Future<List<MerchantStats.YearAmount>> getYearlyTotalAmounts(MonthYearTotalAmountMerchant req);
 }

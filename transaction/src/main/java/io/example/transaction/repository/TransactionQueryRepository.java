@@ -8,9 +8,16 @@ import io.vertx.core.Future;
 
 public interface TransactionQueryRepository {
   Future<PagedResult<Transaction>> getTransactions(FindAllTransactions req);
+
   Future<PagedResult<Transaction>> getActiveTransactions(FindAllTransactions req);
+
   Future<PagedResult<Transaction>> getTrashedTransactions(FindAllTransactions req);
-  Future<Transaction> getTransactionById(int transactionId);
+
+  Future<Transaction> getTransactionById(Integer transactionId);
+
+  Future<Transaction> findByTrashed(Integer transactionId);
+
   Future<PagedResult<Transaction>> getTransactionsByCardNumber(FindAllTransactionCardNumber req);
-  Future<PagedResult<Transaction>> getTransactionsByMerchantId(int merchantId);
+
+  Future<PagedResult<Transaction>> getTransactionsByMerchantId(Integer merchantId);
 }

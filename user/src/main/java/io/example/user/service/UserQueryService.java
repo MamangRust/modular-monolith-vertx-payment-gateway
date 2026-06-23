@@ -1,21 +1,18 @@
 package io.example.user.service;
 
-import java.util.List;
-
-import io.example.common.model.ApiResponse;
-import io.example.common.model.ApiResponsePagination;
+import io.example.common.domain.PagedResult;
+import io.example.user.domain.requests.FindAllUsers;
 import io.example.user.model.UserResponse;
 import io.example.user.model.UserResponseDeleteAt;
 import io.vertx.core.Future;
-import pb.user.User.FindAllUserRequest;
-import pb.user.User.FindByIdUserRequest;
 
 public interface UserQueryService {
-  Future<ApiResponsePagination<List<UserResponse>>> getUsers(FindAllUserRequest req);
+  Future<PagedResult<UserResponse>> getUsers(FindAllUsers req);
 
-  Future<ApiResponsePagination<List<UserResponseDeleteAt>>> getActiveUsers(FindAllUserRequest req);
+  Future<PagedResult<UserResponseDeleteAt>> getActiveUsers(FindAllUsers req);
 
-  Future<ApiResponsePagination<List<UserResponseDeleteAt>>> getTrashedUsers(FindAllUserRequest req);
+  Future<PagedResult<UserResponseDeleteAt>> getTrashedUsers(FindAllUsers req);
 
-  Future<ApiResponse<UserResponse>> getUserById(FindByIdUserRequest req);
+  Future<UserResponse> getUserById(Integer req);
 }
+

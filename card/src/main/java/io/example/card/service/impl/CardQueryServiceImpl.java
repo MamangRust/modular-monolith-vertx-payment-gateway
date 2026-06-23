@@ -1,153 +1,239 @@
 package io.example.card.service.impl;
 
-import java.util.List;
+import java.time.Duration;
+import java.util.Objects;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.example.card.model.Card;
 import io.example.card.model.CardEmail;
 import io.example.card.repository.CardQueryRepository;
 import io.example.card.service.CardQueryService;
-import io.example.common.domain.ApiResponse;
-import io.example.common.domain.ApiResponsePagination;
-import io.example.common.domain.PaginationMeta;
+import io.example.common.domain.PagedResult;
+import io.example.common.exception.grpc.NotFoundException;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.card.Card.FindAllCardRequest;
-import pb.card.Card.FindByIdCardRequest;
-import pb.card.Card.FindByUserIdCardRequest;
-import pb.card.Card.FindByCardNumberRequest;
-import java.time.Duration;
 
+@RequiredArgsConstructor
 public class CardQueryServiceImpl implements CardQueryService {
+  private static final Logger logger = LoggerFactory.getLogger(CardQueryServiceImpl.class);
+  private static final ObjectMapper mapper = new ObjectMapper();
+
   private final CardQueryRepository repository;
   private final RedisService redis;
   private final TracingMetrics metrics;
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
+  private static final String CACHE_PREFIX = "card:";
 
-  public CardQueryServiceImpl(CardQueryRepository repository, RedisService redis, TracingMetrics metrics) {
-    this.repository = repository;
-    this.redis = redis;
-    this.metrics = metrics;
+  private int safePage(int page) {
+    return page > 0 ? page : 1;
   }
 
-  private PaginationMeta calculateMeta(int total, int page, int size) {
-    int totalPages = (int) Math.ceil((double) total / size);
-    return new PaginationMeta(page, size, totalPages, total);
+  private int safePageSize(int size) {
+    return size > 0 ? size : 10;
   }
 
   @Override
-  public Future<ApiResponsePagination<List<Card>>> getCards(FindAllCardRequest request) {
+  public Future<PagedResult<Card>> getCards(FindAllCardRequest request) {
     var ctx = metrics.startSpan("CardQueryService.getCards");
-    return repository.findAllCards(request)
-        .map(res -> ApiResponsePagination.success(
-            "Cards retrieved successfully",
-            res.getData(),
-            calculateMeta(res.getTotalRecords(), request.getPage(), request.getPageSize())
-        ))
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+
+    int page = safePage(request.getPage());
+    int pageSize = safePageSize(request.getPageSize());
+    String cacheKey = String.format("%sall:p:%d:s:%d", CACHE_PREFIX, page, pageSize);
+
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card.cache_hit", true);
+              PagedResult<Card> cached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Card>>() {
+              });
+              return Future.succeededFuture(cached);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached cards: {}", e.getMessage());
+            }
+          }
+          span.setAttribute("card.cache_hit", false);
+          return repository.findAllCards(request)
+              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result));
+        })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getCards", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getCards", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<Card>>> getActiveCards(FindAllCardRequest request) {
+  public Future<PagedResult<Card>> getActiveCards(FindAllCardRequest request) {
     var ctx = metrics.startSpan("CardQueryService.getActiveCards");
-    return repository.findByActive(request)
-        .map(res -> ApiResponsePagination.success(
-            "Active cards retrieved successfully",
-            res.getData(),
-            calculateMeta(res.getTotalRecords(), request.getPage(), request.getPageSize())
-        ))
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+
+    int page = safePage(request.getPage());
+    int pageSize = safePageSize(request.getPageSize());
+    String cacheKey = String.format("%sactive:p:%d:s:%d", CACHE_PREFIX, page, pageSize);
+
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card.cache_hit", true);
+              PagedResult<Card> cached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Card>>() {
+              });
+              return Future.succeededFuture(cached);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached active cards: {}", e.getMessage());
+            }
+          }
+          span.setAttribute("card.cache_hit", false);
+          return repository.findByActive(request)
+              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result));
+        })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getActiveCards", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getActiveCards", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponsePagination<List<Card>>> getTrashedCards(FindAllCardRequest request) {
+  public Future<PagedResult<Card>> getTrashedCards(FindAllCardRequest request) {
     var ctx = metrics.startSpan("CardQueryService.getTrashedCards");
-    return repository.findByTrashed(request)
-        .map(res -> ApiResponsePagination.success(
-            "Trashed cards retrieved successfully",
-            res.getData(),
-            calculateMeta(res.getTotalRecords(), request.getPage(), request.getPageSize())
-        ))
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+
+    int page = safePage(request.getPage());
+    int pageSize = safePageSize(request.getPageSize());
+    String cacheKey = String.format("%strashed:p:%d:s:%d", CACHE_PREFIX, page, pageSize);
+
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card.cache_hit", true);
+              PagedResult<Card> cached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Card>>() {
+              });
+              return Future.succeededFuture(cached);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached trashed cards: {}", e.getMessage());
+            }
+          }
+          span.setAttribute("card.cache_hit", false);
+          return repository.findByTrashed(request)
+              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result));
+        })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getTrashedCards", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getTrashedCards", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<Card>> getCardById(FindByIdCardRequest request) {
+  public Future<Card> getCardById(Integer cardId) {
     var ctx = metrics.startSpan("CardQueryService.getCardById");
-    String cacheKey = "card:id:" + request.getCardId();
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = CACHE_PREFIX + "id:" + cardId;
 
-    return redis.getJson(cacheKey, Card.class)
-        .compose(cachedCard -> {
-          if (cachedCard != null) {
-            return Future.succeededFuture(cachedCard);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card.cache_hit", true);
+              Card card = mapper.readValue(jsonStr, Card.class);
+              return Future.succeededFuture(card);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached card: {}", e.getMessage());
+            }
           }
-          return repository.findById(request.getCardId())
+          span.setAttribute("card.cache_hit", false);
+          return repository.findById(cardId)
               .compose(card -> {
-                if (card != null) {
-                  return redis.setJson(cacheKey, card, CACHE_TTL).map(v -> card);
-                }
-                return Future.succeededFuture(null);
+                if (card == null)
+                  return Future.failedFuture(new NotFoundException("Card not found"));
+                return redis.setJson(cacheKey, card, CACHE_TTL).map(v -> card);
               });
         })
-        .map(card -> ApiResponse.success("Card retrieved successfully", card))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getCardById", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getCardById", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<Card>> getCardByUserId(FindByUserIdCardRequest request) {
+  public Future<Card> getCardByUserId(Integer userId) {
     var ctx = metrics.startSpan("CardQueryService.getCardByUserId");
-    String cacheKey = "card:user:" + request.getUserId();
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = CACHE_PREFIX + "user:" + userId;
 
-    return redis.getJson(cacheKey, Card.class)
-        .compose(cachedCard -> {
-          if (cachedCard != null) {
-            return Future.succeededFuture(cachedCard);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card.cache_hit", true);
+              Card card = mapper.readValue(jsonStr, Card.class);
+              return Future.succeededFuture(card);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached card by userId: {}", e.getMessage());
+            }
           }
-          return repository.findByUserId(request.getUserId())
+          span.setAttribute("card.cache_hit", false);
+          return repository.findByUserId(userId)
               .compose(card -> {
-                if (card != null) {
-                  return redis.setJson(cacheKey, card, CACHE_TTL).map(v -> card);
-                }
-                return Future.succeededFuture(null);
+                if (card == null)
+                  return Future.failedFuture(new NotFoundException("Card not found"));
+                return redis.setJson(cacheKey, card, CACHE_TTL).map(v -> card);
               });
         })
-        .map(card -> ApiResponse.success("Card retrieved successfully", card))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getCardByUserId", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getCardByUserId", e.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<Card>> getCardByCardNumber(FindByCardNumberRequest request) {
+  public Future<Card> getCardByCardNumber(String cardNumber) {
     var ctx = metrics.startSpan("CardQueryService.getCardByCardNumber");
-    String cacheKey = "card:number:" + request.getCardNumber();
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
+    String cacheKey = CACHE_PREFIX + "number:" + cardNumber;
 
-    return redis.getJson(cacheKey, Card.class)
-        .compose(cachedCard -> {
-          if (cachedCard != null) {
-            return Future.succeededFuture(cachedCard);
+    return redis.get(cacheKey)
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("card.cache_hit", true);
+              Card card = mapper.readValue(jsonStr, Card.class);
+              return Future.succeededFuture(card);
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached card by cardNumber: {}", e.getMessage());
+            }
           }
-          return repository.findByCardNumber(request.getCardNumber())
+          span.setAttribute("card.cache_hit", false);
+          return repository.findByCardNumber(cardNumber)
               .compose(card -> {
-                if (card != null) {
-                  return redis.setJson(cacheKey, card, CACHE_TTL).map(v -> card);
-                }
-                return Future.succeededFuture(null);
+                if (card == null)
+                  return Future.failedFuture(new NotFoundException("Card not found"));
+                return redis.setJson(cacheKey, card, CACHE_TTL).map(v -> card);
               });
         })
-        .map(card -> ApiResponse.success("Card retrieved successfully", card))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getCardByCardNumber", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getCardByCardNumber", e.getMessage()));
   }
 
   @Override
   public Future<CardEmail> getCardEmailByCardNumber(String cardNumber) {
-    return repository.findByCardNumber(cardNumber).compose(card -> {
-        if (card == null) return Future.failedFuture("Card not found");
-        // Internal usage usually doesn't need cache here unless specified
-        return Future.succeededFuture(null); 
-    });
+    return repository.getCardEmailByCardNumber(cardNumber)
+        .compose(card -> {
+          if (card == null)
+            return Future.failedFuture(new NotFoundException("Card not found"));
+
+          return Future.succeededFuture(CardEmail.builder()
+              .id(card.getId())
+              .email(card.getEmail())
+              .userId(card.getUserId())
+              .cardNumber(card.getCardNumber())
+              .cardType(card.getCardType())
+              .expireDate(card.getExpireDate())
+              .cvv(card.getCvv())
+              .cardProvider(card.getCardProvider())
+              .createdAt(card.getCreatedAt())
+              .updatedAt(card.getUpdatedAt())
+              .build());
+        });
   }
 }

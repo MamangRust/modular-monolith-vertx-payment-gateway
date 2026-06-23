@@ -1,24 +1,23 @@
 package io.example.withdraw.service;
 
-import io.example.common.model.ApiResponse;
+import io.example.withdraw.domain.requests.CreateWithdrawRequest;
+import io.example.withdraw.domain.requests.UpdateWithdrawRequest;
 import io.example.withdraw.model.WithdrawResponse;
 import io.example.withdraw.model.WithdrawResponseDeleteAt;
 import io.vertx.core.Future;
-import pb.withdraw.WithdrawCommand.CreateWithdrawRequest;
-import pb.withdraw.WithdrawCommand.UpdateWithdrawRequest;
 
 public interface WithdrawCommandService {
-  Future<ApiResponse<WithdrawResponse>> createWithdraw(CreateWithdrawRequest req);
+  Future<WithdrawResponse> createWithdraw(CreateWithdrawRequest req);
 
-  Future<ApiResponse<WithdrawResponse>> updateWithdraw(UpdateWithdrawRequest req);
+  Future<WithdrawResponse> updateWithdraw(UpdateWithdrawRequest req);
 
-  Future<ApiResponse<WithdrawResponseDeleteAt>> trashWithdraw(Integer withdrawId);
+  Future<WithdrawResponseDeleteAt> trashWithdraw(Integer withdrawId);
 
-  Future<ApiResponse<WithdrawResponseDeleteAt>> restoreWithdraw(Integer withdrawId);
+  Future<WithdrawResponseDeleteAt> restoreWithdraw(Integer withdrawId);
 
-  Future<ApiResponse<Void>> deleteWithdrawPermanently(Integer withdrawId);
+  Future<Void> deleteWithdrawPermanently(Integer withdrawId);
 
-  Future<ApiResponse<Void>> restoreAllWithdraws();
+  Future<Void> restoreAllWithdraws();
 
-  Future<ApiResponse<Void>> deleteAllPermanentWithdraws();
+  Future<Void> deleteAllPermanentWithdraws();
 }

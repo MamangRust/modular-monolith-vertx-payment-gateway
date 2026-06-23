@@ -1,8 +1,10 @@
 package io.example.apigateway.handler;
 
-import io.example.apigateway.utils.ProtoMapper;
+import io.example.apigateway.utils.GrpcGatewayUtils;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
+import lombok.RequiredArgsConstructor;
 import pb.merchant.Merchant;
 import pb.merchant.MerchantCommand;
 import pb.merchant.VertxMerchantCommandServiceGrpcClient;
@@ -16,411 +18,457 @@ import pb.merchant_document.MerchantDocumentOuterClass;
 import pb.merchant_document.VertxMerchantDocumentCommandServiceGrpcClient;
 import pb.merchant_document.VertxMerchantDocumentQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class MerchantProxyHandler {
-  private final VertxMerchantQueryServiceGrpcClient queryClient;
-  private final VertxMerchantCommandServiceGrpcClient commandClient;
-  private final VertxMerchantDocumentCommandServiceGrpcClient docCommandClient;
-  private final VertxMerchantDocumentQueryServiceGrpcClient docQueryClient;
-  private final VertxMerchantStatsAmountServiceGrpcClient statsAmountClient;
-  private final VertxMerchantStatsMethodServiceGrpcClient statsMethodClient;
-  private final VertxMerchantStatsTotalAmountServiceGrpcClient statsTotalAmountClient;
-  private final VertxMerchantTransactionServiceGrpcClient txnClient;
+    private final VertxMerchantQueryServiceGrpcClient queryClient;
+    private final VertxMerchantCommandServiceGrpcClient commandClient;
+    private final VertxMerchantDocumentCommandServiceGrpcClient docCommandClient;
+    private final VertxMerchantDocumentQueryServiceGrpcClient docQueryClient;
+    private final VertxMerchantStatsAmountServiceGrpcClient statsAmountClient;
+    private final VertxMerchantStatsMethodServiceGrpcClient statsMethodClient;
+    private final VertxMerchantStatsTotalAmountServiceGrpcClient statsTotalAmountClient;
+    private final VertxMerchantTransactionServiceGrpcClient txnClient;
 
-  public MerchantProxyHandler(
-      VertxMerchantQueryServiceGrpcClient queryClient,
-      VertxMerchantCommandServiceGrpcClient commandClient,
-      VertxMerchantDocumentCommandServiceGrpcClient docCommandClient,
-      VertxMerchantDocumentQueryServiceGrpcClient docQueryClient,
-      VertxMerchantStatsAmountServiceGrpcClient statsAmountClient,
-      VertxMerchantStatsMethodServiceGrpcClient statsMethodClient,
-      VertxMerchantStatsTotalAmountServiceGrpcClient statsTotalAmountClient,
-      VertxMerchantTransactionServiceGrpcClient txnClient) {
-    this.queryClient = queryClient;
-    this.commandClient = commandClient;
-    this.docCommandClient = docCommandClient;
-    this.docQueryClient = docQueryClient;
-    this.statsAmountClient = statsAmountClient;
-    this.statsMethodClient = statsMethodClient;
-    this.statsTotalAmountClient = statsTotalAmountClient;
-    this.txnClient = txnClient;
-  }
+    // ==========================================
+    // REUSABLE REQUEST BUILDERS (DRY Principle)
+    // ==========================================
 
-  private int getYearParam(RoutingContext ctx) {
-    return ctx.queryParams().contains("year") ? Integer.parseInt(ctx.queryParams().get("year")) : 2024;
-  }
+    private Merchant.FindAllMerchantRequest buildFindAllMerchantReq(RoutingContext ctx) {
+        return Merchant.FindAllMerchantRequest.newBuilder()
+                .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+                .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+                .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
+                .build();
+    }
 
-  // =========================================================================
-  // MERCHANTS QUERIES
-  // =========================================================================
+    private MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest buildFindAllDocReq(RoutingContext ctx) {
+        return MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest.newBuilder()
+                .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+                .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+                .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
+                .build();
+    }
 
-  public void getAllMerchants(RoutingContext ctx) {
-    var req = Merchant.FindAllMerchantRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    queryClient.findAllMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // ✅ Baru: Digunakan untuk 6 method Global Stats
+    private Merchant.FindYearMerchant buildFindYearMerchantReq(RoutingContext ctx) {
+        return Merchant.FindYearMerchant.newBuilder()
+                .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+                .build();
+    }
 
-  public void getActiveMerchants(RoutingContext ctx) {
-    var req = Merchant.FindAllMerchantRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    queryClient.findByActive(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // ✅ Baru: Digunakan untuk 6 method Stats By ID
+    private Merchant.FindYearMerchantById buildFindYearMerchantByIdReq(RoutingContext ctx) {
+        return Merchant.FindYearMerchantById.newBuilder()
+                .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+                .setMerchantId(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId"))
+                .build();
+    }
 
-  public void getTrashedMerchants(RoutingContext ctx) {
-    var req = Merchant.FindAllMerchantRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    queryClient.findByTrashed(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // ✅ Baru: Digunakan untuk 6 method Stats By Api Key
+    private Merchant.FindYearMerchantByApikey buildFindYearMerchantByApikeyReq(RoutingContext ctx) {
+        return Merchant.FindYearMerchantByApikey.newBuilder()
+                .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+                .setApiKey(ctx.pathParam("apiKey"))
+                .build();
+    }
 
-  public void getMerchantById(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindByIdMerchantRequest.newBuilder().setMerchantId(id).build();
-    queryClient.findByIdMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // ==========================================
+    // BASE MERCHANT QUERIES
+    // ==========================================
 
-  public void getMerchantByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindByApiKeyRequest.newBuilder().setApiKey(key).build();
-    queryClient.findByApiKey(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getAllMerchants(RoutingContext ctx) {
+        queryClient.findAllMerchant(buildFindAllMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMerchantByName(RoutingContext ctx) {
-    // Not provided by grpc, return empty array or use queryClient to query all.
-    ctx.response().setStatusCode(200).putHeader("Content-Type", "application/json")
-        .end("{\"status\":\"200\",\"message\":\"success\",\"data\":[]}");
-  }
+    public void getActiveMerchants(RoutingContext ctx) {
+        queryClient.findByActive(buildFindAllMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMerchantsByUserId(RoutingContext ctx) {
-    int uId = Integer.parseInt(ctx.pathParam("userId"));
-    var req = Merchant.FindByMerchantUserIdRequest.newBuilder().setUserId(uId).build();
-    queryClient.findByMerchantUserId(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getTrashedMerchants(RoutingContext ctx) {
+        queryClient.findByTrashed(buildFindAllMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  // =========================================================================
-  // MERCHANTS COMMANDS
-  // =========================================================================
+    public void getMerchantById(RoutingContext ctx) {
+        var req = Merchant.FindByIdMerchantRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId"))
+                .build();
+        queryClient.findByIdMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void createMerchant(RoutingContext ctx) {
-    JsonObject body = ctx.body().asJsonObject();
-    var req = MerchantCommand.CreateMerchantRequest.newBuilder()
-        .setUserId(body.getInteger("user_id", 0))
-        .setName(body.getString("name", ""))
-        .build();
-    commandClient.createMerchant(req).onSuccess(r -> sendResponse(ctx, r, 201)).onFailure(ctx::fail);
-  }
+    public void getMerchantByApiKey(RoutingContext ctx) {
+        var req = Merchant.FindByApiKeyRequest.newBuilder().setApiKey(ctx.pathParam("apiKey")).build();
+        queryClient.findByApiKey(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void updateMerchant(RoutingContext ctx) {
-    JsonObject body = ctx.body().asJsonObject();
-    var req = MerchantCommand.UpdateMerchantRequest.newBuilder()
-        .setMerchantId(body.getInteger("id", 0))
-        .setUserId(body.getInteger("user_id", 0))
-        .setName(body.getString("name", ""))
-        .setStatus(body.getString("status", ""))
-        .build();
-    commandClient.updateMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMerchantByName(RoutingContext ctx) {
+        ctx.response()
+                .setStatusCode(200)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject().put("status", 200).put("message", "success")
+                        .put("data", new JsonArray()).encode());
+    }
 
-  public void updateMerchantStatus(RoutingContext ctx) {
-    JsonObject body = ctx.body().asJsonObject();
-    var req = MerchantCommand.UpdateMerchantStatusRequest.newBuilder()
-        .setMerchantId(body.getInteger("id", 0))
-        .setStatus(body.getString("status", ""))
-        .build();
-    commandClient.updateMerchantStatus(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMerchantsByUserId(RoutingContext ctx) {
+        var req = Merchant.FindByMerchantUserIdRequest.newBuilder()
+                .setUserId(GrpcGatewayUtils.getSafePathInt(ctx, "userId"))
+                .build();
+        queryClient.findByMerchantUserId(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void trashMerchant(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindByIdMerchantRequest.newBuilder().setMerchantId(id).build();
-    commandClient.trashedMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // ==========================================
+    // MERCHANT COMMANDS (Null-Safe JSON Parsing)
+    // ==========================================
 
-  public void restoreMerchant(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindByIdMerchantRequest.newBuilder().setMerchantId(id).build();
-    commandClient.restoreMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void createMerchant(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        var req = MerchantCommand.CreateMerchantRequest.newBuilder()
+                .setUserId(GrpcGatewayUtils.getJsonInteger(body, "user_id", 0))
+                .setName(GrpcGatewayUtils.getJsonString(body, "name", ""))
+                .build();
+        commandClient.createMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void deleteMerchantPermanently(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindByIdMerchantRequest.newBuilder().setMerchantId(id).build();
-    commandClient.deleteMerchantPermanent(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void updateMerchant(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        var req = MerchantCommand.UpdateMerchantRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+                .setUserId(GrpcGatewayUtils.getJsonInteger(body, "user_id", 0))
+                .setName(GrpcGatewayUtils.getJsonString(body, "name", ""))
+                .setStatus(GrpcGatewayUtils.getJsonString(body, "status", ""))
+                .build();
+        commandClient.updateMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void restoreAllMerchants(RoutingContext ctx) {
-    commandClient.restoreAllMerchant(com.google.protobuf.Empty.getDefaultInstance())
-        .onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void updateMerchantStatus(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        var req = MerchantCommand.UpdateMerchantStatusRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+                .setStatus(GrpcGatewayUtils.getJsonString(body, "status", ""))
+                .build();
+        commandClient.updateMerchantStatus(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void deleteAllPermanentMerchants(RoutingContext ctx) {
-    commandClient.deleteAllMerchantPermanent(com.google.protobuf.Empty.getDefaultInstance())
-        .onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void trashMerchant(RoutingContext ctx) {
+        var req = Merchant.FindByIdMerchantRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId"))
+                .build();
+        commandClient.trashedMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  // =========================================================================
-  // ANALYTICS - TRANSACTIONAL & METHODS
-  // =========================================================================
+    public void restoreMerchant(RoutingContext ctx) {
+        var req = Merchant.FindByIdMerchantRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId"))
+                .build();
+        commandClient.restoreMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void findAllTransactions(RoutingContext ctx) {
-    var req = Merchant.FindAllMerchantTransaction.newBuilder()
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .build();
-    txnClient.findAllTransactionMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void deleteMerchantPermanently(RoutingContext ctx) {
+        var req = Merchant.FindByIdMerchantRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId"))
+                .build();
+        commandClient.deleteMerchantPermanent(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void findAllTransactionsByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindAllMerchantTransactionApikey.newBuilder()
-        .setApiKey(key)
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .build();
-    txnClient.findAllTransactionByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void restoreAllMerchants(RoutingContext ctx) {
+        commandClient.restoreAllMerchant(com.google.protobuf.Empty.getDefaultInstance())
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void findAllTransactionsByMerchantId(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindAllMerchantTransactionId.newBuilder()
-        .setId(String.valueOf(id))
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .build();
-    txnClient.findAllTransactionByMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void deleteAllPermanentMerchants(RoutingContext ctx) {
+        commandClient.deleteAllMerchantPermanent(com.google.protobuf.Empty.getDefaultInstance())
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  // === GLOBAL STATS ===
-  public void getMonthlyPaymentMethodsMerchant(RoutingContext ctx) {
-    var req = Merchant.FindYearMerchant.newBuilder().setYear(getYearParam(ctx)).build();
-    statsMethodClient.findMonthlyPaymentMethodsMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    // ==========================================
+    // ANALYTICS - TRANSACTIONS
+    // ==========================================
 
-  public void getYearlyPaymentMethodMerchant(RoutingContext ctx) {
-    var req = Merchant.FindYearMerchant.newBuilder().setYear(getYearParam(ctx)).build();
-    statsMethodClient.findYearlyPaymentMethodMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void findAllTransactions(RoutingContext ctx) {
+        var req = Merchant.FindAllMerchantTransaction.newBuilder()
+                .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+                .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
+                .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+                .build();
+        txnClient.findAllTransactionMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMonthlyAmountMerchant(RoutingContext ctx) {
-    var req = Merchant.FindYearMerchant.newBuilder().setYear(getYearParam(ctx)).build();
-    statsAmountClient.findMonthlyAmountMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void findAllTransactionsByApiKey(RoutingContext ctx) {
+        var req = Merchant.FindAllMerchantTransactionApikey.newBuilder()
+                .setApiKey(ctx.pathParam("apiKey"))
+                .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+                .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
+                .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+                .build();
+        txnClient.findAllTransactionByApikey(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyAmountMerchant(RoutingContext ctx) {
-    var req = Merchant.FindYearMerchant.newBuilder().setYear(getYearParam(ctx)).build();
-    statsAmountClient.findYearlyAmountMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void findAllTransactionsByMerchantId(RoutingContext ctx) {
+        var req = Merchant.FindAllMerchantTransactionId.newBuilder()
+                .setId(String.valueOf(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId")))
+                .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+                .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
+                .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+                .build();
+        txnClient.findAllTransactionByMerchant(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMonthlyTotalAmountMerchant(RoutingContext ctx) {
-    var req = Merchant.FindYearMerchant.newBuilder().setYear(getYearParam(ctx)).build();
-    statsTotalAmountClient.findMonthlyTotalAmountMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    // ==========================================
+    // ANALYTICS - GLOBAL STATS (Menggunakan Builder)
+    // ==========================================
 
-  public void getYearlyTotalAmountMerchant(RoutingContext ctx) {
-    var req = Merchant.FindYearMerchant.newBuilder().setYear(getYearParam(ctx)).build();
-    statsTotalAmountClient.findYearlyTotalAmountMerchant(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getMonthlyPaymentMethodsMerchant(RoutingContext ctx) {
+        statsMethodClient.findMonthlyPaymentMethodsMerchant(buildFindYearMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  // === STATS BY ID ===
-  public void getMonthlyPaymentMethodByMerchant(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindYearMerchantById.newBuilder().setYear(getYearParam(ctx)).setMerchantId(id).build();
-    statsMethodClient.findMonthlyPaymentMethodByMerchants(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getYearlyPaymentMethodMerchant(RoutingContext ctx) {
+        statsMethodClient.findYearlyPaymentMethodMerchant(buildFindYearMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyPaymentMethodByMerchants(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindYearMerchantById.newBuilder().setYear(getYearParam(ctx)).setMerchantId(id).build();
-    statsMethodClient.findYearlyPaymentMethodByMerchants(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getMonthlyAmountMerchant(RoutingContext ctx) {
+        statsAmountClient.findMonthlyAmountMerchant(buildFindYearMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMonthlyAmountByMerchants(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindYearMerchantById.newBuilder().setYear(getYearParam(ctx)).setMerchantId(id).build();
-    statsAmountClient.findMonthlyAmountByMerchants(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getYearlyAmountMerchant(RoutingContext ctx) {
+        statsAmountClient.findYearlyAmountMerchant(buildFindYearMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyAmountByMerchants(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindYearMerchantById.newBuilder().setYear(getYearParam(ctx)).setMerchantId(id).build();
-    statsAmountClient.findYearlyAmountByMerchants(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMonthlyTotalAmountMerchant(RoutingContext ctx) {
+        statsTotalAmountClient.findMonthlyTotalAmountMerchant(buildFindYearMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMonthlyTotalAmountByMerchant(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindYearMerchantById.newBuilder().setYear(getYearParam(ctx)).setMerchantId(id).build();
-    statsTotalAmountClient.findMonthlyTotalAmountByMerchants(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getYearlyTotalAmountMerchant(RoutingContext ctx) {
+        statsTotalAmountClient.findYearlyTotalAmountMerchant(buildFindYearMerchantReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyTotalAmountByMerchant(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("merchantId"));
-    var req = Merchant.FindYearMerchantById.newBuilder().setYear(getYearParam(ctx)).setMerchantId(id).build();
-    statsTotalAmountClient.findYearlyTotalAmountByMerchants(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    // ==========================================
+    // ANALYTICS - STATS BY MERCHANT ID (Menggunakan Builder)
+    // ==========================================
 
-  // === STATS BY API KEY ===
-  public void getMonthlyPaymentMethodByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindYearMerchantByApikey.newBuilder().setYear(getYearParam(ctx)).setApiKey(key).build();
-    statsMethodClient.findMonthlyPaymentMethodByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getMonthlyPaymentMethodByMerchant(RoutingContext ctx) {
+        statsMethodClient.findMonthlyPaymentMethodByMerchants(buildFindYearMerchantByIdReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyPaymentMethodByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindYearMerchantByApikey.newBuilder().setYear(getYearParam(ctx)).setApiKey(key).build();
-    statsMethodClient.findYearlyPaymentMethodByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getYearlyPaymentMethodByMerchants(RoutingContext ctx) {
+        statsMethodClient.findYearlyPaymentMethodByMerchants(buildFindYearMerchantByIdReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMonthlyAmountByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindYearMerchantByApikey.newBuilder().setYear(getYearParam(ctx)).setApiKey(key).build();
-    statsAmountClient.findMonthlyAmountByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMonthlyAmountByMerchants(RoutingContext ctx) {
+        statsAmountClient.findMonthlyAmountByMerchants(buildFindYearMerchantByIdReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyAmountByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindYearMerchantByApikey.newBuilder().setYear(getYearParam(ctx)).setApiKey(key).build();
-    statsAmountClient.findYearlyAmountByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getYearlyAmountByMerchants(RoutingContext ctx) {
+        statsAmountClient.findYearlyAmountByMerchants(buildFindYearMerchantByIdReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMonthlyTotalAmountByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindYearMerchantByApikey.newBuilder().setYear(getYearParam(ctx)).setApiKey(key).build();
-    statsTotalAmountClient.findMonthlyTotalAmountByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getMonthlyTotalAmountByMerchant(RoutingContext ctx) {
+        statsTotalAmountClient.findMonthlyTotalAmountByMerchants(buildFindYearMerchantByIdReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getYearlyTotalAmountByApiKey(RoutingContext ctx) {
-    String key = ctx.pathParam("apiKey");
-    var req = Merchant.FindYearMerchantByApikey.newBuilder().setYear(getYearParam(ctx)).setApiKey(key).build();
-    statsTotalAmountClient.findYearlyTotalAmountByApikey(req).onSuccess(r -> sendResponse(ctx, r, 200))
-        .onFailure(ctx::fail);
-  }
+    public void getYearlyTotalAmountByMerchant(RoutingContext ctx) {
+        statsTotalAmountClient.findYearlyTotalAmountByMerchants(buildFindYearMerchantByIdReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  // =========================================================================
-  // MERCHANT DOCUMENTS
-  // =========================================================================
+    // ==========================================
+    // ANALYTICS - STATS BY API KEY (Menggunakan Builder)
+    // ==========================================
 
-  public void getAllMerchantDocuments(RoutingContext ctx) {
-    var req = MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    docQueryClient.findAll(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMonthlyPaymentMethodByApiKey(RoutingContext ctx) {
+        statsMethodClient.findMonthlyPaymentMethodByApikey(buildFindYearMerchantByApikeyReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getActiveMerchantDocuments(RoutingContext ctx) {
-    var req = MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    docQueryClient.findAllActive(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getYearlyPaymentMethodByApiKey(RoutingContext ctx) {
+        statsMethodClient.findYearlyPaymentMethodByApikey(buildFindYearMerchantByApikeyReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getTrashedMerchantDocuments(RoutingContext ctx) {
-    var req = MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    docQueryClient.findAllTrashed(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMonthlyAmountByApiKey(RoutingContext ctx) {
+        statsAmountClient.findMonthlyAmountByApikey(buildFindYearMerchantByApikeyReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void getMerchantDocumentById(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("documentId"));
-    var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder().setDocumentId(id).build();
-    docQueryClient.findById(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getYearlyAmountByApiKey(RoutingContext ctx) {
+        statsAmountClient.findYearlyAmountByApikey(buildFindYearMerchantByApikeyReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void createMerchantDocument(RoutingContext ctx) {
-    JsonObject body = ctx.body().asJsonObject();
-    var req = MerchantDocumentCommand.CreateMerchantDocumentRequest.newBuilder()
-        .setMerchantId(body.getInteger("merchant_id", 0))
-        .setDocumentType(body.getString("document_type", ""))
-        .setDocumentUrl(body.getString("document_path", ""))
-        .build();
-    docCommandClient.create(req).onSuccess(r -> sendResponse(ctx, r, 201)).onFailure(ctx::fail);
-  }
+    public void getMonthlyTotalAmountByApiKey(RoutingContext ctx) {
+        statsTotalAmountClient.findMonthlyTotalAmountByApikey(buildFindYearMerchantByApikeyReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void updateMerchantDocument(RoutingContext ctx) {
-    JsonObject body = ctx.body().asJsonObject();
-    int id = Integer.parseInt(ctx.pathParam("documentId"));
-    var req = MerchantDocumentCommand.UpdateMerchantDocumentRequest.newBuilder()
-        .setDocumentId(id)
-        .setMerchantId(body.getInteger("merchant_id", 0))
-        .setDocumentType(body.getString("document_type", ""))
-        .setDocumentUrl(body.getString("document_path", ""))
-        .build();
-    docCommandClient.update(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getYearlyTotalAmountByApiKey(RoutingContext ctx) {
+        statsTotalAmountClient.findYearlyTotalAmountByApikey(buildFindYearMerchantByApikeyReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void updateMerchantDocumentStatus(RoutingContext ctx) {
-    JsonObject body = ctx.body().asJsonObject();
-    int id = Integer.parseInt(ctx.pathParam("documentId"));
-    var req = MerchantDocumentCommand.UpdateMerchantDocumentStatusRequest.newBuilder()
-        .setDocumentId(id)
-        .setStatus(body.getString("status", ""))
-        .setNote(body.getString("note", ""))
-        .build();
-    docCommandClient.updateStatus(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // ==========================================
+    // MERCHANT DOCUMENTS
+    // ==========================================
 
-  public void trashMerchantDocument(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("documentId"));
-    var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder().setDocumentId(id).build();
-    docCommandClient.trashed(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getAllMerchantDocuments(RoutingContext ctx) {
+        docQueryClient.findAll(buildFindAllDocReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void restoreMerchantDocument(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("documentId"));
-    var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder().setDocumentId(id).build();
-    docCommandClient.restore(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getActiveMerchantDocuments(RoutingContext ctx) {
+        docQueryClient.findAllActive(buildFindAllDocReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void deleteMerchantDocumentPermanently(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("documentId"));
-    var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder().setDocumentId(id).build();
-    docCommandClient.deletePermanent(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getTrashedMerchantDocuments(RoutingContext ctx) {
+        docQueryClient.findAllTrashed(buildFindAllDocReq(ctx))
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void restoreAllMerchantDocuments(RoutingContext ctx) {
-    docCommandClient.restoreAll(com.google.protobuf.Empty.getDefaultInstance())
-        .onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    public void getMerchantDocumentById(RoutingContext ctx) {
+        var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder()
+                .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .build();
+        docQueryClient.findById(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  public void deleteAllPermanentMerchantDocuments(RoutingContext ctx) {
-    docCommandClient.deleteAllPermanent(com.google.protobuf.Empty.getDefaultInstance())
-        .onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
+    // Null-Safe Commands for Documents
+    public void createMerchantDocument(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        var req = MerchantDocumentCommand.CreateMerchantDocumentRequest.newBuilder()
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
+                .setDocumentType(GrpcGatewayUtils.getJsonString(body, "document_type", ""))
+                .setDocumentUrl(GrpcGatewayUtils.getJsonString(body, "document_path", ""))
+                .build();
+        docCommandClient.create(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 
-  private void sendResponse(RoutingContext ctx, com.google.protobuf.MessageOrBuilder proto, int defaultStatus) {
-    JsonObject json = ProtoMapper.toJson(proto);
-    int status = json.getInteger("status", defaultStatus);
-    ctx.response()
-        .setStatusCode(status == 0 ? defaultStatus : status)
-        .putHeader("Content-Type", "application/json")
-        .end(json.encode());
-  }
+    public void updateMerchantDocument(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        var req = MerchantDocumentCommand.UpdateMerchantDocumentRequest.newBuilder()
+                .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
+                .setDocumentType(GrpcGatewayUtils.getJsonString(body, "document_type", ""))
+                .setDocumentUrl(GrpcGatewayUtils.getJsonString(body, "document_path", ""))
+                .build();
+        docCommandClient.update(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
+
+    public void updateMerchantDocumentStatus(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        var req = MerchantDocumentCommand.UpdateMerchantDocumentStatusRequest.newBuilder()
+                .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .setStatus(GrpcGatewayUtils.getJsonString(body, "status", ""))
+                .setNote(GrpcGatewayUtils.getJsonString(body, "note", ""))
+                .build();
+        docCommandClient.updateStatus(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
+
+    public void trashMerchantDocument(RoutingContext ctx) {
+        var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder()
+                .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .build();
+        docCommandClient.trashed(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
+
+    public void restoreMerchantDocument(RoutingContext ctx) {
+        var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder()
+                .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .build();
+        docCommandClient.restore(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
+
+    public void deleteMerchantDocumentPermanently(RoutingContext ctx) {
+        var req = MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest.newBuilder()
+                .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .build();
+        docCommandClient.deletePermanent(req)
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
+
+    public void restoreAllMerchantDocuments(RoutingContext ctx) {
+        docCommandClient.restoreAll(com.google.protobuf.Empty.getDefaultInstance())
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
+
+    public void deleteAllPermanentMerchantDocuments(RoutingContext ctx) {
+        docCommandClient.deleteAllPermanent(com.google.protobuf.Empty.getDefaultInstance())
+                .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+                .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+    }
 }

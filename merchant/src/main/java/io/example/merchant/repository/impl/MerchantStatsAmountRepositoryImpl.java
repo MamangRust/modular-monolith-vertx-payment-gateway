@@ -10,13 +10,11 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsAmountRepositoryImpl implements MerchantStatsAmountRepository {
   private final Pool pool;
-
-  public MerchantStatsAmountRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
@@ -41,7 +39,8 @@ public class MerchantStatsAmountRepositoryImpl implements MerchantStatsAmountRep
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(year)))
         .map(rows -> {
           List<MerchantStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.MonthAmount.fromRow(r));
           return list;
         });
   }
@@ -58,14 +57,15 @@ public class MerchantStatsAmountRepositoryImpl implements MerchantStatsAmountRep
               AND EXTRACT(YEAR FROM t.transaction_time) <= $1::int
             GROUP BY EXTRACT(YEAR FROM t.transaction_time)
         )
-        SELECT year::text, COALESCE(amount, 0)::bigint AS amount 
-        FROM last_five_years 
+        SELECT year::text, COALESCE(amount, 0)::bigint AS amount
+        FROM last_five_years
         ORDER BY year
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(year))
         .map(rows -> {
           List<MerchantStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.YearAmount.fromRow(r));
           return list;
         });
   }

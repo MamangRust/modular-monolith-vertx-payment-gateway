@@ -3,15 +3,13 @@ package io.example.card.repository.impl;
 import io.example.card.exception.NotFoundException;
 import io.example.card.repository.UserClientRepository;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.user.User;
 import pb.user.VertxUserQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class UserClientRepositoryImpl implements UserClientRepository {
   private final VertxUserQueryServiceGrpcClient client;
-
-  public UserClientRepositoryImpl(VertxUserQueryServiceGrpcClient client) {
-    this.client = client;
-  }
 
   @Override
   public Future<Object> getUserById(Integer userId) {

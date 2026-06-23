@@ -10,28 +10,26 @@ import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
-import pb.transaction.Transaction.FindMonthlyTransactionStatus;
-import pb.transaction.Transaction.FindYearTransactionStatus;
-import pb.transaction.Transaction.FindMonthlyTransactionStatusCardNumber;
-import pb.transaction.Transaction.FindYearTransactionStatusCardNumber;
+import io.example.transaction.domain.requests.MonthStatusTransaction;
+import io.example.transaction.domain.requests.MonthStatusTransactionCardNumber;
+import io.example.transaction.domain.requests.YearStatusTransaction;
+import io.example.transaction.domain.requests.YearStatusTransactionCardNumber;
 
+@RequiredArgsConstructor
 public class TransactionStatsStatusRepositoryImpl implements TransactionStatsStatusRepository {
   private final Pool pool;
 
-  public TransactionStatsStatusRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
-
   @Override
-  public Future<List<TransactionStats.MonthStatus>> getMonthlyStatus(FindMonthlyTransactionStatus req, String status) {
+  public Future<List<TransactionStats.MonthStatus>> getMonthlyStatus(MonthStatusTransaction req) {
     int year = (int) req.getYear();
     int month = (int) req.getMonth();
     OffsetDateTime curr = OffsetDateTime.of(year, month, 1, 0, 0, 0, 0, ZoneOffset.UTC);
     OffsetDateTime prev = curr.minusMonths(1);
     OffsetDateTime endCurr = curr.plusMonths(1).minusNanos(1);
     OffsetDateTime endPrev = curr.minusNanos(1);
-    String countCol = "total_" + status;
+    String countCol = "total_" + req.getStatus();
 
     String sql = String.format("""
         WITH monthly_data AS (
@@ -82,18 +80,19 @@ public class TransactionStatsStatusRepositoryImpl implements TransactionStatsSta
         SELECT * FROM formatted_data ORDER BY year DESC, TO_DATE(month, 'Mon') DESC
         """, countCol, countCol, countCol, countCol);
 
-    return pool.preparedQuery(sql).execute(Tuple.of(status, curr, endCurr, prev, endPrev))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getStatus(), curr, endCurr, prev, endPrev))
         .map(rows -> {
           List<TransactionStats.MonthStatus> list = new ArrayList<>();
-          for (Row r : rows) list.add(TransactionStats.MonthStatus.fromRow(r, countCol));
+          for (Row r : rows)
+            list.add(TransactionStats.MonthStatus.fromRow(r, countCol));
           return list;
         });
   }
 
   @Override
-  public Future<List<TransactionStats.YearStatus>> getYearlyStatus(FindYearTransactionStatus req, String status) {
+  public Future<List<TransactionStats.YearStatus>> getYearlyStatus(YearStatusTransaction req) {
     int endYear = (int) req.getYear();
-    String countCol = "total_" + status;
+    String countCol = "total_" + req.getStatus();
     String sql = String.format("""
         WITH yearly_data AS (
             SELECT
@@ -133,16 +132,17 @@ public class TransactionStatsStatusRepositoryImpl implements TransactionStatsSta
         SELECT * FROM formatted_data ORDER BY year DESC
         """, countCol, countCol, countCol, countCol);
 
-    return pool.preparedQuery(sql).execute(Tuple.of(status, endYear))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getStatus(), endYear))
         .map(rows -> {
           List<TransactionStats.YearStatus> list = new ArrayList<>();
-          for (Row r : rows) list.add(TransactionStats.YearStatus.fromRow(r, countCol));
+          for (Row r : rows)
+            list.add(TransactionStats.YearStatus.fromRow(r, countCol));
           return list;
         });
   }
 
   @Override
-  public Future<List<TransactionStats.MonthStatus>> getMonthlyStatusByCard(FindMonthlyTransactionStatusCardNumber req, String status) {
+  public Future<List<TransactionStats.MonthStatus>> getMonthlyStatusByCard(MonthStatusTransactionCardNumber req) {
     int year = (int) req.getYear();
     int month = (int) req.getMonth();
     String card = req.getCardNumber();
@@ -150,7 +150,7 @@ public class TransactionStatsStatusRepositoryImpl implements TransactionStatsSta
     OffsetDateTime prev = curr.minusMonths(1);
     OffsetDateTime endCurr = curr.plusMonths(1).minusNanos(1);
     OffsetDateTime endPrev = curr.minusNanos(1);
-    String countCol = "total_" + status;
+    String countCol = "total_" + req.getStatus();
 
     String sql = String.format("""
         WITH monthly_data AS (
@@ -201,19 +201,20 @@ public class TransactionStatsStatusRepositoryImpl implements TransactionStatsSta
         SELECT * FROM formatted_data ORDER BY year DESC, TO_DATE(month, 'Mon') DESC
         """, countCol, countCol, countCol, countCol);
 
-    return pool.preparedQuery(sql).execute(Tuple.of(status, card, curr, endCurr, prev, endPrev))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getStatus(), card, curr, endCurr, prev, endPrev))
         .map(rows -> {
           List<TransactionStats.MonthStatus> list = new ArrayList<>();
-          for (Row r : rows) list.add(TransactionStats.MonthStatus.fromRow(r, countCol));
+          for (Row r : rows)
+            list.add(TransactionStats.MonthStatus.fromRow(r, countCol));
           return list;
         });
   }
 
   @Override
-  public Future<List<TransactionStats.YearStatus>> getYearlyStatusByCard(FindYearTransactionStatusCardNumber req, String status) {
+  public Future<List<TransactionStats.YearStatus>> getYearlyStatusByCard(YearStatusTransactionCardNumber req) {
     int year = (int) req.getYear();
     String card = req.getCardNumber();
-    String countCol = "total_" + status;
+    String countCol = "total_" + req.getStatus();
     String sql = String.format("""
         WITH yearly_data AS (
             SELECT
@@ -253,10 +254,11 @@ public class TransactionStatsStatusRepositoryImpl implements TransactionStatsSta
         SELECT * FROM formatted_data ORDER BY year DESC
         """, countCol, countCol, countCol, countCol);
 
-    return pool.preparedQuery(sql).execute(Tuple.of(status, card, year))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getStatus(), card, year))
         .map(rows -> {
           List<TransactionStats.YearStatus> list = new ArrayList<>();
-          for (Row r : rows) list.add(TransactionStats.YearStatus.fromRow(r, countCol));
+          for (Row r : rows)
+            list.add(TransactionStats.YearStatus.fromRow(r, countCol));
           return list;
         });
   }

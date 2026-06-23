@@ -5,27 +5,25 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.example.topup.domain.requests.topup.YearTopupCardNumberRequest;
 import io.example.topup.model.TopupStats;
 import io.example.topup.repository.TopupStatsByCardAmountRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
-import pb.topup.Topup.FindYearTopupCardNumber;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TopupStatsByCardAmountRepositoryImpl implements TopupStatsByCardAmountRepository {
   private final Pool pool;
-
-  public TopupStatsByCardAmountRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
   }
 
   @Override
-  public Future<List<TopupStats.MonthAmount>> getMonthlyTopupAmountsByCard(FindYearTopupCardNumber req) {
+  public Future<List<TopupStats.MonthAmount>> getMonthlyTopupAmountsByCard(YearTopupCardNumberRequest req) {
     int year = req.getYear();
     String card = req.getCardNumber();
     String sql = """
@@ -48,7 +46,7 @@ public class TopupStatsByCardAmountRepositoryImpl implements TopupStatsByCardAmo
   }
 
   @Override
-  public Future<List<TopupStats.YearAmount>> getYearlyTopupAmountsByCard(FindYearTopupCardNumber req) {
+  public Future<List<TopupStats.YearAmount>> getYearlyTopupAmountsByCard(YearTopupCardNumberRequest req) {
     int endYear = req.getYear();
     String card = req.getCardNumber();
     String sql = """

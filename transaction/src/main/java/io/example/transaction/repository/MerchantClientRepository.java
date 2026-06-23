@@ -1,6 +1,6 @@
 package io.example.transaction.repository;
 
-import io.example.common.exception.NotFoundException;
+import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
 import pb.merchant.Merchant.ApiResponseMerchant;
 import pb.merchant.Merchant.FindByApiKeyRequest;

@@ -4,26 +4,27 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+
+import io.example.merchant.domain.requests.merchant.MonthYearPaymentMethodMerchant;
 import io.example.merchant.model.MerchantStats;
 import io.example.merchant.repository.MerchantStatsMethodByMerchantRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsMethodByMerchantRepositoryImpl implements MerchantStatsMethodByMerchantRepository {
   private final Pool pool;
-
-  public MerchantStatsMethodByMerchantRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
   }
 
   @Override
-  public Future<List<MerchantStats.MonthMethod>> getMonthlyPaymentMethodByMerchants(pb.merchant.Merchant.FindYearMerchantById req) {
+  public Future<List<MerchantStats.MonthMethod>> getMonthlyPaymentMethodByMerchants(
+      MonthYearPaymentMethodMerchant req) {
     String sql = """
         WITH months AS (
             SELECT generate_series(
@@ -47,13 +48,15 @@ public class MerchantStatsMethodByMerchantRepositoryImpl implements MerchantStat
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(req.getYear()), req.getMerchantId()))
         .map(rows -> {
           List<MerchantStats.MonthMethod> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.MonthMethod.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.MonthMethod.fromRow(r));
           return list;
         });
   }
 
   @Override
-  public Future<List<MerchantStats.YearMethod>> getYearlyPaymentMethodByMerchants(pb.merchant.Merchant.FindYearMerchantById req) {
+  public Future<List<MerchantStats.YearMethod>> getYearlyPaymentMethodByMerchants(
+      MonthYearPaymentMethodMerchant req) {
     String sql = """
         WITH last_five_years AS (
             SELECT EXTRACT(YEAR FROM t.transaction_time) AS year, t.payment_method, SUM(t.amount) AS amount
@@ -65,14 +68,15 @@ public class MerchantStatsMethodByMerchantRepositoryImpl implements MerchantStat
               AND EXTRACT(YEAR FROM t.transaction_time) <= $1::int
             GROUP BY EXTRACT(YEAR FROM t.transaction_time), t.payment_method
         )
-        SELECT year::text, payment_method, COALESCE(amount, 0)::bigint AS amount 
-        FROM last_five_years 
+        SELECT year::text, payment_method, COALESCE(amount, 0)::bigint AS amount
+        FROM last_five_years
         ORDER BY year
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(req.getYear(), req.getMerchantId()))
         .map(rows -> {
           List<MerchantStats.YearMethod> list = new ArrayList<>();
-          for (Row r : rows) list.add(MerchantStats.YearMethod.fromRow(r));
+          for (Row r : rows)
+            list.add(MerchantStats.YearMethod.fromRow(r));
           return list;
         });
   }

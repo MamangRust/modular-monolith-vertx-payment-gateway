@@ -1,8 +1,9 @@
 package io.example.apigateway.handler;
 
-import io.example.apigateway.utils.ProtoMapper;
+import io.example.apigateway.utils.GrpcGatewayUtils;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
+import lombok.RequiredArgsConstructor;
 import pb.transaction.Transaction;
 import pb.transaction.TransactionCommand;
 import pb.transaction.TransactionQuery;
@@ -12,6 +13,7 @@ import pb.transaction.stats.VertxTransactionStatsAmountServiceGrpcClient;
 import pb.transaction.stats.VertxTransactionStatsMethodServiceGrpcClient;
 import pb.transaction.stats.VertxTransactionStatsStatusServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class TransactionProxyHandler {
   private final VertxTransactionQueryServiceGrpcClient queryClient;
   private final VertxTransactionCommandServiceGrpcClient commandClient;
@@ -19,80 +21,100 @@ public class TransactionProxyHandler {
   private final VertxTransactionStatsMethodServiceGrpcClient statsMethodClient;
   private final VertxTransactionStatsStatusServiceGrpcClient statsStatusClient;
 
-  public TransactionProxyHandler(
-      VertxTransactionQueryServiceGrpcClient queryClient,
-      VertxTransactionCommandServiceGrpcClient commandClient,
-      VertxTransactionStatsAmountServiceGrpcClient statsAmountClient,
-      VertxTransactionStatsMethodServiceGrpcClient statsMethodClient,
-      VertxTransactionStatsStatusServiceGrpcClient statsStatusClient) {
-    this.queryClient = queryClient;
-    this.commandClient = commandClient;
-    this.statsAmountClient = statsAmountClient;
-    this.statsMethodClient = statsMethodClient;
-    this.statsStatusClient = statsStatusClient;
-  }
-
-  private int getYearParam(RoutingContext ctx) {
-    return ctx.queryParams().contains("year") ? Integer.parseInt(ctx.queryParams().get("year")) : 2024;
-  }
-  private int getMonthParam(RoutingContext ctx) {
-    return ctx.queryParams().contains("month") ? Integer.parseInt(ctx.queryParams().get("month")) : 1;
-  }
-
-  // == BASIC ==
-  public void getTransactions(RoutingContext ctx) {
-    var req = TransactionQuery.FindAllTransactionRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
+  private TransactionQuery.FindAllTransactionRequest buildFindAllTransactionReq(RoutingContext ctx) {
+    return TransactionQuery.FindAllTransactionRequest.newBuilder()
+        .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
+        .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
+        .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
         .build();
-    queryClient.findAllTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+  }
+
+  private Transaction.FindYearTransactionStatus buildFindYearTransactionStatusReq(RoutingContext ctx) {
+    return Transaction.FindYearTransactionStatus.newBuilder()
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .build();
+  }
+
+  private Transaction.FindByYearCardNumberTransactionRequest buildFindByYearCardNumberReq(RoutingContext ctx) {
+    return Transaction.FindByYearCardNumberTransactionRequest.newBuilder()
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .setCardNumber(ctx.pathParam("cardNumber"))
+        .build();
+  }
+
+  private Transaction.FindMonthlyTransactionStatus buildFindMonthlyTransactionStatusReq(RoutingContext ctx) {
+    return Transaction.FindMonthlyTransactionStatus.newBuilder()
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .setMonth(GrpcGatewayUtils.getQueryInt(ctx, "month", 1))
+        .build();
+  }
+
+  private Transaction.FindMonthlyTransactionStatusCardNumber buildFindMonthlyTransactionStatusCardNumberReq(
+      RoutingContext ctx) {
+    return Transaction.FindMonthlyTransactionStatusCardNumber.newBuilder()
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .setMonth(GrpcGatewayUtils.getQueryInt(ctx, "month", 1))
+        .setCardNumber(ctx.pathParam("cardNumber"))
+        .build();
+  }
+
+  private Transaction.FindYearTransactionStatusCardNumber buildFindYearTransactionStatusCardNumberReq(
+      RoutingContext ctx) {
+    return Transaction.FindYearTransactionStatusCardNumber.newBuilder()
+        .setYear(GrpcGatewayUtils.getQueryInt(ctx, "year", 2024))
+        .setCardNumber(ctx.pathParam("cardNumber"))
+        .build();
+  }
+
+  public void getTransactions(RoutingContext ctx) {
+    queryClient.findAllTransaction(buildFindAllTransactionReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getActiveTransactions(RoutingContext ctx) {
-    var req = TransactionQuery.FindAllTransactionRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    queryClient.findByActiveTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    queryClient.findByActiveTransaction(buildFindAllTransactionReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getTrashedTransactions(RoutingContext ctx) {
-    var req = TransactionQuery.FindAllTransactionRequest.newBuilder()
-        .setSearch(ctx.queryParams().get("search") != null ? ctx.queryParams().get("search") : "")
-        .setPage(ctx.queryParams().contains("page") ? Integer.parseInt(ctx.queryParams().get("page")) : 1)
-        .setPageSize(ctx.queryParams().contains("pageSize") ? Integer.parseInt(ctx.queryParams().get("pageSize")) : 10)
-        .build();
-    queryClient.findByTrashedTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    queryClient.findByTrashedTransaction(buildFindAllTransactionReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getTransactionById(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("transactionId"));
-    var req = Transaction.FindByIdTransactionRequest.newBuilder().setTransactionId(id).build();
-    queryClient.findByIdTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    var req = Transaction.FindByIdTransactionRequest.newBuilder()
+        .setTransactionId(GrpcGatewayUtils.getSafePathInt(ctx, "transactionId"))
+        .build();
+    queryClient.findByIdTransaction(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getTransactionsByCardNumber(RoutingContext ctx) {
-    String card = ctx.pathParam("cardNumber");
-    var req = TransactionQuery.FindAllTransactionCardNumberRequest.newBuilder().setCardNumber(card).build();
-    queryClient.findAllTransactionByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    var req = TransactionQuery.FindAllTransactionCardNumberRequest.newBuilder()
+        .setCardNumber(ctx.pathParam("cardNumber")).build();
+    queryClient.findAllTransactionByCardNumber(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
-  // == COMMANDS ==
   public void createTransaction(RoutingContext ctx) {
     JsonObject body = ctx.body().asJsonObject();
-    // Retrieve merchantId from validation context
     pb.merchant.Merchant.MerchantResponse merchant = ctx.get("merchant");
     int merchantId = merchant != null ? merchant.getId() : 0;
 
     var req = TransactionCommand.CreateTransactionRequest.newBuilder()
-        .setCardNumber(body.getString("card_number", ""))
-        .setAmount(body.getInteger("amount", 0))
-        .setPaymentMethod(body.getString("payment_method", ""))
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
+        .setPaymentMethod(GrpcGatewayUtils.getJsonString(body, "payment_method", ""))
         .setMerchantId(merchantId)
         .build();
-    commandClient.createTransaction(req).onSuccess(r -> sendResponse(ctx, r, 201)).onFailure(ctx::fail);
+    commandClient.createTransaction(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void updateTransaction(RoutingContext ctx) {
@@ -101,130 +123,151 @@ public class TransactionProxyHandler {
     int merchantId = merchant != null ? merchant.getId() : 0;
 
     var req = TransactionCommand.UpdateTransactionRequest.newBuilder()
-        .setTransactionId(body.getInteger("id", 0))
-        .setCardNumber(body.getString("card_number", ""))
-        .setAmount(body.getInteger("amount", 0))
-        .setPaymentMethod(body.getString("payment_method", ""))
+        .setTransactionId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
+        .setPaymentMethod(GrpcGatewayUtils.getJsonString(body, "payment_method", ""))
         .setMerchantId(merchantId)
         .build();
-    commandClient.updateTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    commandClient.updateTransaction(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void trashTransaction(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("transactionId"));
-    var req = Transaction.FindByIdTransactionRequest.newBuilder().setTransactionId(id).build();
-    commandClient.trashedTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    var req = Transaction.FindByIdTransactionRequest.newBuilder()
+        .setTransactionId(GrpcGatewayUtils.getSafePathInt(ctx, "transactionId"))
+        .build();
+    commandClient.trashedTransaction(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void restoreTransaction(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("transactionId"));
-    var req = Transaction.FindByIdTransactionRequest.newBuilder().setTransactionId(id).build();
-    commandClient.restoreTransaction(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    var req = Transaction.FindByIdTransactionRequest.newBuilder()
+        .setTransactionId(GrpcGatewayUtils.getSafePathInt(ctx, "transactionId"))
+        .build();
+    commandClient.restoreTransaction(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void deleteTransactionPermanently(RoutingContext ctx) {
-    int id = Integer.parseInt(ctx.pathParam("transactionId"));
-    var req = Transaction.FindByIdTransactionRequest.newBuilder().setTransactionId(id).build();
-    commandClient.deleteTransactionPermanent(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    var req = Transaction.FindByIdTransactionRequest.newBuilder()
+        .setTransactionId(GrpcGatewayUtils.getSafePathInt(ctx, "transactionId"))
+        .build();
+    commandClient.deleteTransactionPermanent(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void restoreAllTransactions(RoutingContext ctx) {
-    commandClient.restoreAllTransaction(com.google.protobuf.Empty.getDefaultInstance()).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    commandClient.restoreAllTransaction(com.google.protobuf.Empty.getDefaultInstance())
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void deleteAllPermanentTransactions(RoutingContext ctx) {
-    commandClient.deleteAllTransactionPermanent(com.google.protobuf.Empty.getDefaultInstance()).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    commandClient.deleteAllTransactionPermanent(com.google.protobuf.Empty.getDefaultInstance())
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
-  // == STATS STATUS ==
   public void getMonthTransactionStatusSuccess(RoutingContext ctx) {
-    var req = Transaction.FindMonthlyTransactionStatus.newBuilder().setYear(getYearParam(ctx)).setMonth(getMonthParam(ctx)).build();
-    statsStatusClient.findMonthlyTransactionStatusSuccess(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient.findMonthlyTransactionStatusSuccess(buildFindMonthlyTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyTransactionStatusSuccess(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatus.newBuilder().setYear(getYearParam(ctx)).build();
-    statsStatusClient.findYearlyTransactionStatusSuccess(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient.findYearlyTransactionStatusSuccess(buildFindYearTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getMonthTransactionStatusFailed(RoutingContext ctx) {
-    var req = Transaction.FindMonthlyTransactionStatus.newBuilder().setYear(getYearParam(ctx)).setMonth(getMonthParam(ctx)).build();
-    statsStatusClient.findMonthlyTransactionStatusFailed(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient.findMonthlyTransactionStatusFailed(buildFindMonthlyTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyTransactionStatusFailed(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatus.newBuilder().setYear(getYearParam(ctx)).build();
-    statsStatusClient.findYearlyTransactionStatusFailed(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient.findYearlyTransactionStatusFailed(buildFindYearTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getMonthTransactionStatusSuccessCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindMonthlyTransactionStatusCardNumber.newBuilder().setYear(getYearParam(ctx)).setMonth(getMonthParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsStatusClient.findMonthlyTransactionStatusSuccessByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient
+        .findMonthlyTransactionStatusSuccessByCardNumber(buildFindMonthlyTransactionStatusCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyTransactionStatusSuccessCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatusCardNumber.newBuilder().setYear(getYearParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsStatusClient.findYearlyTransactionStatusSuccessByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient.findYearlyTransactionStatusSuccessByCardNumber(buildFindYearTransactionStatusCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getMonthTransactionStatusFailedCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindMonthlyTransactionStatusCardNumber.newBuilder().setYear(getYearParam(ctx)).setMonth(getMonthParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsStatusClient.findMonthlyTransactionStatusFailedByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient
+        .findMonthlyTransactionStatusFailedByCardNumber(buildFindMonthlyTransactionStatusCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyTransactionStatusFailedCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatusCardNumber.newBuilder().setYear(getYearParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsStatusClient.findYearlyTransactionStatusFailedByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsStatusClient.findYearlyTransactionStatusFailedByCardNumber(buildFindYearTransactionStatusCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
-  // == STATS METHOD ==
   public void getMonthlyPaymentMethods(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatus.newBuilder().setYear(getYearParam(ctx)).build();
-    statsMethodClient.findMonthlyPaymentMethods(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsMethodClient.findMonthlyPaymentMethods(buildFindYearTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyPaymentMethods(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatus.newBuilder().setYear(getYearParam(ctx)).build();
-    statsMethodClient.findYearlyPaymentMethods(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsMethodClient.findYearlyPaymentMethods(buildFindYearTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getMonthlyPaymentMethodsByCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindByYearCardNumberTransactionRequest.newBuilder().setYear(getYearParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsMethodClient.findMonthlyPaymentMethodsByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsMethodClient.findMonthlyPaymentMethodsByCardNumber(buildFindByYearCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyPaymentMethodsByCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindByYearCardNumberTransactionRequest.newBuilder().setYear(getYearParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsMethodClient.findYearlyPaymentMethodsByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsMethodClient.findYearlyPaymentMethodsByCardNumber(buildFindByYearCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
-  // == STATS AMOUNT ==
   public void getMonthlyAmounts(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatus.newBuilder().setYear(getYearParam(ctx)).build();
-    statsAmountClient.findMonthlyAmounts(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsAmountClient.findMonthlyAmounts(buildFindYearTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyAmounts(RoutingContext ctx) {
-    var req = Transaction.FindYearTransactionStatus.newBuilder().setYear(getYearParam(ctx)).build();
-    statsAmountClient.findYearlyAmounts(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsAmountClient.findYearlyAmounts(buildFindYearTransactionStatusReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getMonthlyAmountsByCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindByYearCardNumberTransactionRequest.newBuilder().setYear(getYearParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsAmountClient.findMonthlyAmountsByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
+    statsAmountClient.findMonthlyAmountsByCardNumber(buildFindByYearCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 
   public void getYearlyAmountsByCardNumber(RoutingContext ctx) {
-    var req = Transaction.FindByYearCardNumberTransactionRequest.newBuilder().setYear(getYearParam(ctx)).setCardNumber(ctx.pathParam("cardNumber")).build();
-    statsAmountClient.findYearlyAmountsByCardNumber(req).onSuccess(r -> sendResponse(ctx, r, 200)).onFailure(ctx::fail);
-  }
-
-  private void sendResponse(RoutingContext ctx, com.google.protobuf.MessageOrBuilder proto, int defaultStatus) {
-    JsonObject json = ProtoMapper.toJson(proto);
-    int status = json.getInteger("status", defaultStatus);
-    ctx.response()
-        .setStatusCode(status == 0 ? defaultStatus : status)
-        .putHeader("Content-Type", "application/json")
-        .end(json.encode());
+    statsAmountClient.findYearlyAmountsByCardNumber(buildFindByYearCardNumberReq(ctx))
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 }

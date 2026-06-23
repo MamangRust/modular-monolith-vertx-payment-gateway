@@ -1,76 +1,81 @@
 package io.example.transfer.handler;
 
+import io.example.common.grpc.GrpcExceptionMapper;
+import io.example.transfer.domain.requests.MonthYearCardNumber;
 import io.example.transfer.service.TransferStatsAmountService;
+import io.example.transfer.service.TransferStatsByCardAmountService;
 import io.vertx.core.Future;
-import pb.transfer.Transfer.*;
-import pb.transfer.stats.TransferStatsAmount.*;
+import lombok.RequiredArgsConstructor;
+import pb.transfer.Transfer.FindByCardNumberTransferRequest;
+import pb.transfer.Transfer.FindYearTransferStatus;
+import pb.transfer.stats.TransferStatsAmount.ApiResponseTransferMonthAmount;
+import pb.transfer.stats.TransferStatsAmount.ApiResponseTransferYearAmount;
 
-public class TransferStatsAmountHandler implements pb.transfer.stats.VertxTransferStatsAmountServiceGrpcServer.TransferStatsAmountServiceApi {
+@RequiredArgsConstructor
+public class TransferStatsAmountHandler
+    implements pb.transfer.stats.VertxTransferStatsAmountServiceGrpcServer.TransferStatsAmountServiceApi {
   private final TransferStatsAmountService service;
-  private final io.example.transfer.service.TransferStatsByCardAmountService byCardService;
-
-  public TransferStatsAmountHandler(TransferStatsAmountService service, io.example.transfer.service.TransferStatsByCardAmountService byCardService) {
-    this.service = service;
-    this.byCardService = byCardService;
-  }
+  private final TransferStatsByCardAmountService byCardService;
 
   @Override
   public Future<ApiResponseTransferMonthAmount> findMonthlyTransferAmounts(FindYearTransferStatus req) {
     return service.getMonthlyTransferAmounts(req.getYear())
         .map(res -> ApiResponseTransferMonthAmount.newBuilder()
-            .setStatus("success")
-            .setMessage("Monthly transfers volume retrieved")
-            .addAllData(res.stream().map(ProtoConverter::toMonthAmount).toList())
-            .build());
+            .setStatus("success").setMessage("Monthly transfers volume retrieved")
+            .addAllData(res.stream().map(ProtoConverter::toMonthAmount).toList()).build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseTransferYearAmount> findYearlyTransferAmounts(FindYearTransferStatus req) {
     return service.getYearlyTransferAmounts(req.getYear())
         .map(res -> ApiResponseTransferYearAmount.newBuilder()
-            .setStatus("success")
-            .setMessage("Yearly transfers volume retrieved")
-            .addAllData(res.stream().map(ProtoConverter::toYearlyAmount).toList())
-            .build());
+            .setStatus("success").setMessage("Yearly transfers volume retrieved")
+            .addAllData(res.stream().map(ProtoConverter::toYearlyAmount).toList()).build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<ApiResponseTransferMonthAmount> findMonthlyTransferAmountsBySenderCardNumber(FindByCardNumberTransferRequest req) {
-    return byCardService.getMonthlySenderAmountsByCard(req.getCardNumber(), req.getYear())
+  public Future<ApiResponseTransferMonthAmount> findMonthlyTransferAmountsBySenderCardNumber(
+      FindByCardNumberTransferRequest req) {
+    var domainReq = MonthYearCardNumber.builder().cardNumber(req.getCardNumber()).year(req.getYear()).build();
+    return byCardService.getMonthlySenderAmountsByCard(domainReq)
         .map(res -> ApiResponseTransferMonthAmount.newBuilder()
-            .setStatus("success")
-            .setMessage("Monthly sender transfer volume retrieved")
-            .addAllData(res.stream().map(ProtoConverter::toMonthAmount).toList())
-            .build());
+            .setStatus("success").setMessage("Monthly sender transfer volume retrieved")
+            .addAllData(res.stream().map(ProtoConverter::toMonthAmount).toList()).build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<ApiResponseTransferMonthAmount> findMonthlyTransferAmountsByReceiverCardNumber(FindByCardNumberTransferRequest req) {
-    return byCardService.getMonthlyReceiverAmountsByCard(req.getCardNumber(), req.getYear())
+  public Future<ApiResponseTransferMonthAmount> findMonthlyTransferAmountsByReceiverCardNumber(
+      FindByCardNumberTransferRequest req) {
+    var domainReq = MonthYearCardNumber.builder().cardNumber(req.getCardNumber()).year(req.getYear()).build();
+    return byCardService.getMonthlyReceiverAmountsByCard(domainReq)
         .map(res -> ApiResponseTransferMonthAmount.newBuilder()
-            .setStatus("success")
-            .setMessage("Monthly receiver transfer volume retrieved")
-            .addAllData(res.stream().map(ProtoConverter::toMonthAmount).toList())
-            .build());
+            .setStatus("success").setMessage("Monthly receiver transfer volume retrieved")
+            .addAllData(res.stream().map(ProtoConverter::toMonthAmount).toList()).build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<ApiResponseTransferYearAmount> findYearlyTransferAmountsBySenderCardNumber(FindByCardNumberTransferRequest req) {
-    return byCardService.getYearlySenderAmountsByCard(req.getCardNumber(), req.getYear())
+  public Future<ApiResponseTransferYearAmount> findYearlyTransferAmountsBySenderCardNumber(
+      FindByCardNumberTransferRequest req) {
+    var domainReq = MonthYearCardNumber.builder().cardNumber(req.getCardNumber()).year(req.getYear()).build();
+    return byCardService.getYearlySenderAmountsByCard(domainReq)
         .map(res -> ApiResponseTransferYearAmount.newBuilder()
-            .setStatus("success")
-            .setMessage("Yearly sender transfer volume retrieved")
-            .addAllData(res.stream().map(ProtoConverter::toYearlyAmount).toList())
-            .build());
+            .setStatus("success").setMessage("Yearly sender transfer volume retrieved")
+            .addAllData(res.stream().map(ProtoConverter::toYearlyAmount).toList()).build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
-  public Future<ApiResponseTransferYearAmount> findYearlyTransferAmountsByReceiverCardNumber(FindByCardNumberTransferRequest req) {
-    return byCardService.getYearlyReceiverAmountsByCard(req.getCardNumber(), req.getYear())
+  public Future<ApiResponseTransferYearAmount> findYearlyTransferAmountsByReceiverCardNumber(
+      FindByCardNumberTransferRequest req) {
+    var domainReq = MonthYearCardNumber.builder().cardNumber(req.getCardNumber()).year(req.getYear()).build();
+    return byCardService.getYearlyReceiverAmountsByCard(domainReq)
         .map(res -> ApiResponseTransferYearAmount.newBuilder()
-            .setStatus("success")
-            .setMessage("Yearly receiver transfer volume retrieved")
-            .addAllData(res.stream().map(ProtoConverter::toYearlyAmount).toList())
-            .build());
+            .setStatus("success").setMessage("Yearly receiver transfer volume retrieved")
+            .addAllData(res.stream().map(ProtoConverter::toYearlyAmount).toList()).build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 }

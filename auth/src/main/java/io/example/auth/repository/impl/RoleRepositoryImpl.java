@@ -5,13 +5,11 @@ import io.example.auth.repository.RoleRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class RoleRepositoryImpl implements RoleRepository {
     private final Pool pool;
-
-    public RoleRepositoryImpl(Pool pool) {
-        this.pool = pool;
-    }
 
     @Override
     public Future<Role> findById(Integer id) {

@@ -5,27 +5,25 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.example.topup.domain.requests.topup.YearTopupRequest;
 import io.example.topup.model.TopupStats;
 import io.example.topup.repository.TopupStatsMethodRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
-import pb.topup.Topup.FindYearTopupStatus;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TopupStatsMethodRepositoryImpl implements TopupStatsMethodRepository {
   private final Pool pool;
-
-  public TopupStatsMethodRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private OffsetDateTime getYearStart(int year) {
     return OffsetDateTime.of(year, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
   }
 
   @Override
-  public Future<List<TopupStats.MonthMethod>> getMonthlyTopupMethods(FindYearTopupStatus req) {
+  public Future<List<TopupStats.MonthMethod>> getMonthlyTopupMethods(YearTopupRequest req) {
     int year = req.getYear();
     String sql = """
         WITH months AS (
@@ -49,7 +47,7 @@ public class TopupStatsMethodRepositoryImpl implements TopupStatsMethodRepositor
   }
 
   @Override
-  public Future<List<TopupStats.YearMethod>> getYearlyTopupMethods(FindYearTopupStatus req) {
+  public Future<List<TopupStats.YearMethod>> getYearlyTopupMethods(YearTopupRequest req) {
     int endYear = req.getYear();
     String sql = """
         SELECT EXTRACT(YEAR FROM t.topup_time)::integer AS year, t.topup_method, COUNT(t.topup_id)::integer AS total_topups, COALESCE(SUM(t.topup_amount), 0)::integer AS total_amount

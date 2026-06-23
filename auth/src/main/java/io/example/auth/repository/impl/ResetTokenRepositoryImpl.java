@@ -5,15 +5,13 @@ import io.example.auth.repository.ResetTokenRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
 import java.time.LocalDateTime;
 
+@RequiredArgsConstructor
 public class ResetTokenRepositoryImpl implements ResetTokenRepository {
     private final Pool pool;
-
-    public ResetTokenRepositoryImpl(Pool pool) {
-        this.pool = pool;
-    }
 
     @Override
     public Future<ResetToken> findByToken(String code) {

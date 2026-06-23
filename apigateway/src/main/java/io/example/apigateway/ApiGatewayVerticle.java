@@ -2,6 +2,9 @@ package io.example.apigateway;
 
 import io.example.apigateway.handler.*;
 import io.example.apigateway.routes.GatewayRoutes;
+import io.example.common.chaos.ChaosGrpcClientInterceptor;
+import io.example.common.chaos.ChaosHttpMiddleware;
+import io.example.common.chaos.ChaosManager;
 import io.example.common.config.JwtConfig;
 import io.example.common.config.TelemetryConfig;
 import io.vertx.core.AbstractVerticle;
@@ -54,8 +57,11 @@ public class ApiGatewayVerticle extends AbstractVerticle {
     telemetryConfig = new TelemetryConfig(telConfig);
     telemetryConfig.initialize();
 
-    // 2. Instantiate unified gRPC Client pool
+    // 2. Instantiate unified gRPC Client pool (wrapped with chaos interceptor)
     grpcClient = GrpcClient.client(vertx);
+    ChaosManager chaosManager = new ChaosManager();
+    chaosManager.startWatcher(vertx);
+    grpcClient = ChaosGrpcClientInterceptor.wrap(grpcClient, chaosManager, vertx);
 
     // 3. Define all SocketAddresses for backend microservices using environment variables
     SocketAddress addrUser = resolveGrpcAddress("USER", "user", 8083);
@@ -152,6 +158,8 @@ public class ApiGatewayVerticle extends AbstractVerticle {
 
     // 7. Configure web routers & launch web interface
     Router baseRouter = Router.router(vertx);
+    // Apply HTTP chaos middleware globally before routing logic
+    baseRouter.route().handler(new ChaosHttpMiddleware(chaosManager));
     
     Router registeredRouter = GatewayRoutes.register(
         baseRouter,
@@ -166,7 +174,8 @@ public class ApiGatewayVerticle extends AbstractVerticle {
         topupHandler,
         transferHandler,
         withdrawHandler,
-        txHandler
+        txHandler,
+        chaosManager
     );
 
     int port = rawConfig.getInteger("http_port", 8080);

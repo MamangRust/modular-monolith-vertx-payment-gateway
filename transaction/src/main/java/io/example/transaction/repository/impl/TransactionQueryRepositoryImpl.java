@@ -2,6 +2,7 @@ package io.example.transaction.repository.impl;
 
 import java.util.ArrayList;
 import java.util.List;
+
 import io.example.common.domain.PagedResult;
 import io.example.transaction.domain.requests.FindAllTransactionCardNumber;
 import io.example.transaction.domain.requests.FindAllTransactions;
@@ -12,13 +13,11 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransactionQueryRepositoryImpl implements TransactionQueryRepository {
   private final Pool pool;
-
-  public TransactionQueryRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String normalizeSearch(String search) {
     return (search == null || search.isBlank()) ? null : search;
@@ -58,7 +57,7 @@ public class TransactionQueryRepositoryImpl implements TransactionQueryRepositor
   }
 
   @Override
-  public Future<Transaction> getTransactionById(int transactionId) {
+  public Future<Transaction> getTransactionById(Integer transactionId) {
     String sql = "SELECT * FROM transactions WHERE transaction_id = $1 AND deleted_at IS NULL";
     return pool.preparedQuery(sql).execute(Tuple.of(transactionId)).map(this::mapSingle);
   }
@@ -76,12 +75,13 @@ public class TransactionQueryRepositoryImpl implements TransactionQueryRepositor
         ORDER BY transaction_time DESC
         LIMIT $3 OFFSET $4
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(req.getCardNumber(), normalizeSearch(req.getSearch()), pageSize, offset))
+    return pool.preparedQuery(sql)
+        .execute(Tuple.of(req.getCardNumber(), normalizeSearch(req.getSearch()), pageSize, offset))
         .map(this::mapPaged);
   }
 
   @Override
-  public Future<PagedResult<Transaction>> getTransactionsByMerchantId(int merchantId) {
+  public Future<PagedResult<Transaction>> getTransactionsByMerchantId(Integer merchantId) {
     String sql = """
         SELECT *, COUNT(*) OVER () AS total_count
         FROM transactions
@@ -90,6 +90,12 @@ public class TransactionQueryRepositoryImpl implements TransactionQueryRepositor
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(merchantId))
         .map(this::mapPaged);
+  }
+
+  @Override
+  public Future<Transaction> findByTrashed(Integer transactionId) {
+    String sql = "SELECT * FROM transactions WHERE transaction_id = $1 AND deleted_at IS NOT NULL";
+    return pool.preparedQuery(sql).execute(Tuple.of(transactionId)).map(this::mapSingle);
   }
 
   private Transaction mapSingle(RowSet<Row> rows) {

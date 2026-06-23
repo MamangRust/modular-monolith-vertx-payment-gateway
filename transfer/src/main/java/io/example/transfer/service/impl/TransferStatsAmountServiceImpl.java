@@ -8,20 +8,15 @@ import io.example.transfer.model.TransferStats;
 import io.example.transfer.repository.TransferStatsAmountRepository;
 import io.example.transfer.service.TransferStatsAmountService;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransferStatsAmountServiceImpl implements TransferStatsAmountService {
   private final TransferStatsAmountRepository repository;
   private final RedisService redis;
   private final TracingMetrics metrics;
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
   private static final String CACHE_PREFIX = "transfer:stats:amount:";
-
-  public TransferStatsAmountServiceImpl(TransferStatsAmountRepository repository, RedisService redis,
-      TracingMetrics metrics) {
-    this.repository = repository;
-    this.redis = redis;
-    this.metrics = metrics;
-  }
 
   @Override
   public Future<List<TransferStats.MonthAmount>> getMonthlyTransferAmounts(int year) {
@@ -31,14 +26,13 @@ public class TransferStatsAmountServiceImpl implements TransferStatsAmountServic
     return redis.getJsonList(cacheKey, TransferStats.MonthAmount.class)
         .compose(cached -> {
           if (!cached.isEmpty()) {
-            metrics.completeSpanSuccess(ctx, "getMonthlyTransferAmounts", "Success (from cache)");
             return Future.succeededFuture(cached);
           }
           return repository.getMonthlyTransferAmounts(year)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTransferAmounts", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTransferAmounts", e.getMessage()));
-        });
+              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTransferAmounts", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTransferAmounts", e.getMessage()));
   }
 
   @Override
@@ -49,13 +43,12 @@ public class TransferStatsAmountServiceImpl implements TransferStatsAmountServic
     return redis.getJsonList(cacheKey, TransferStats.YearAmount.class)
         .compose(cached -> {
           if (!cached.isEmpty()) {
-            metrics.completeSpanSuccess(ctx, "getYearlyTransferAmounts", "Success (from cache)");
             return Future.succeededFuture(cached);
           }
           return repository.getYearlyTransferAmounts(endYear)
-              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTransferAmounts", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTransferAmounts", e.getMessage()));
-        });
+              .compose(res -> redis.setJsonList(cacheKey, res, CACHE_TTL).map(v -> res));
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTransferAmounts", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTransferAmounts", e.getMessage()));
   }
 }

@@ -9,15 +9,13 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 import pb.card.CardCommand.CreateCardRequest;
 import pb.card.CardCommand.UpdateCardRequest;
 
+@RequiredArgsConstructor
 public class CardCommandRepositoryImpl implements CardCommandRepository {
   private final Pool pool;
-
-  public CardCommandRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String generateRandomCardNumber() {
     Random rand = new Random();
@@ -104,19 +102,19 @@ public class CardCommandRepositoryImpl implements CardCommandRepository {
   }
 
   @Override
-  public Future<Boolean> restoreAllCards() {
+  public Future<Integer> restoreAllCards() {
     return pool
         .preparedQuery("UPDATE cards SET deleted_at = NULL WHERE deleted_at IS NOT NULL")
         .execute()
-        .map(rows -> true);
+        .map(RowSet::rowCount);
   }
 
   @Override
-  public Future<Boolean> deleteAllCardsPermanent() {
+  public Future<Integer> deleteAllCardsPermanent() {
     return pool
         .preparedQuery("DELETE FROM cards WHERE deleted_at IS NOT NULL")
         .execute()
-        .map(rows -> true);
+        .map(RowSet::rowCount);
   }
 
   @Override

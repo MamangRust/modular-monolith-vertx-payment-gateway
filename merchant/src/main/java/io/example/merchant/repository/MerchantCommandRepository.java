@@ -8,13 +8,18 @@ import pb.merchant.MerchantCommand.UpdateMerchantStatusRequest;
 
 public interface MerchantCommandRepository {
   Future<Merchant> createMerchant(CreateMerchantRequest request);
+
   Future<Merchant> updateMerchant(UpdateMerchantRequest request);
+
   Future<Merchant> updateMerchantStatus(UpdateMerchantStatusRequest request);
-  
-  Future<Merchant> trashedMerchant(int merchantId);
-  Future<Merchant> restoreMerchant(int merchantId);
-  Future<Boolean> deleteMerchantPermanent(int merchantId);
-  
-  Future<Boolean> restoreAllMerchants();
-  Future<Boolean> deleteAllMerchantsPermanent();
+
+  Future<Merchant> trashedMerchant(Integer merchantId);
+
+  Future<Merchant> restoreMerchant(Integer merchantId);
+
+  Future<Boolean> deleteMerchantPermanent(Integer merchantId);
+
+  Future<Integer> restoreAllMerchants();
+
+  Future<Integer> deleteAllMerchantsPermanent();
 }

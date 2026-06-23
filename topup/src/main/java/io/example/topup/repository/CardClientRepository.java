@@ -1,7 +1,8 @@
 package io.example.topup.repository;
 
-import io.example.common.exception.NotFoundException;
+import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.card.Card.ApiResponseCard;
 import pb.card.Card.CardWithEmailResponse;
 import pb.card.Card.FindByCardNumberRequest;
@@ -9,15 +10,10 @@ import pb.card.CardCommand.UpdateCardRequest;
 import pb.card.VertxCardCommandServiceGrpcClient;
 import pb.card.VertxCardQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class CardClientRepository {
   private final VertxCardQueryServiceGrpcClient queryStub;
   private final VertxCardCommandServiceGrpcClient commandStub;
-
-  public CardClientRepository(VertxCardQueryServiceGrpcClient queryStub,
-      VertxCardCommandServiceGrpcClient commandStub) {
-    this.queryStub = queryStub;
-    this.commandStub = commandStub;
-  }
 
   public Future<ApiResponseCard> getCardByCardNumber(String cardNumber) {
     return queryStub.findByCardNumber(FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())

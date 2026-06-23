@@ -73,6 +73,14 @@ public class WithdrawQueryRepositoryImpl implements WithdrawQueryRepository {
   }
 
   @Override
+  public Future<Withdraw> findByTrashed(Integer withdrawId) {
+    return pool.preparedQuery(
+        "SELECT * FROM withdraws WHERE withdraw_id = $1 AND deleted_at IS NOT NULL")
+        .execute(Tuple.of(withdrawId))
+        .map(this::mapSingleOrNull);
+  }
+
+  @Override
   public Future<PagedResult<Withdraw>> getWithdrawsByCardNumber(String card, String search, int page, int pageSize) {
     int offset = Math.max(0, page - 1) * pageSize;
     String sql = """

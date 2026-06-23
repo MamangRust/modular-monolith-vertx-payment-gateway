@@ -7,13 +7,14 @@ import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.example.common.exception.NotFoundException;
-import io.example.common.model.ApiResponse;
-import io.example.common.model.ApiResponsePagination;
-import io.example.common.model.PagedResult;
-import io.example.common.model.PaginationMeta;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.example.common.domain.PagedResult;
+import io.example.common.exception.api.NotFoundException;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.example.transfer.domain.requests.FindAllTransfers;
 import io.example.transfer.model.Transfer;
 import io.example.transfer.model.TransferResponse;
 import io.example.transfer.model.TransferResponseDeleteAt;
@@ -22,12 +23,12 @@ import io.example.transfer.service.TransferQueryService;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonObject;
-import io.example.transfer.domain.requests.FindAllTransfers;
-import pb.transfer.Transfer.FindAllTransferRequest;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TransferQueryServiceImpl implements TransferQueryService {
   private static final Logger logger = LoggerFactory.getLogger(TransferQueryServiceImpl.class);
+  private static final ObjectMapper mapper = new ObjectMapper();
 
   private final TransferQueryRepository repo;
   private final RedisService redisService;
@@ -36,315 +37,188 @@ public class TransferQueryServiceImpl implements TransferQueryService {
   private static final String CACHE_PREFIX = "transfer:";
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-  public TransferQueryServiceImpl(
-      TransferQueryRepository repo,
-      RedisService redisService,
-      TracingMetrics tracingMetrics) {
-    this.repo = repo;
-    this.redisService = redisService;
-    this.tracingMetrics = tracingMetrics;
+  private PagedResult<TransferResponse> mapTransferPagination(PagedResult<Transfer> result, int page, int pageSize) {
+    int totalRecords = result.getTotalRecords();
+    List<TransferResponse> data = result.getData().stream().map(TransferResponse::from).toList();
+    return new PagedResult<>(data, totalRecords);
+  }
+
+  private PagedResult<TransferResponseDeleteAt> mapTransferPaginationDeleteAt(PagedResult<Transfer> result, int page,
+      int pageSize) {
+    int totalRecords = result.getTotalRecords();
+    List<TransferResponseDeleteAt> data = result.getData().stream().map(TransferResponseDeleteAt::from).toList();
+    return new PagedResult<>(data, totalRecords);
   }
 
   @Override
-  public Future<ApiResponsePagination<List<TransferResponse>>> getAllTransfers(
-      FindAllTransferRequest req) {
-
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TransferService.getAllTransfers");
+  public Future<PagedResult<TransferResponse>> getAllTransfers(FindAllTransfers req) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getAllTransfers");
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
-    FindAllTransfers domainReq = FindAllTransfers.builder()
-        .page(req.getPage() > 0 ? req.getPage() : 1)
-        .pageSize(req.getPageSize() > 0 ? req.getPageSize() : 10)
-        .search(req.getSearch() != null ? req.getSearch() : "")
-        .build();
-
-    logger.info(
-        "Fetching transfers | search={}, page={}, pageSize={}",
-        domainReq.getSearch(), domainReq.getPage(), domainReq.getPageSize());
-
-    return repo.getTransfers(domainReq)
-        .map(result -> {
-          ApiResponsePagination<List<TransferResponse>> response = mapTransferPagination(result, domainReq);
-          span.setAttribute("transfers.count", response.data().size());
-          span.setAttribute("transfers.total_records", response.pagination().totalRecords());
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Transfers fetched successfully");
-          return response;
-        })
-        .recover(throwable -> {
-          logger.error("Failed to fetch transfers", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_all", throwable.getMessage());
-
-          return Future.succeededFuture(
-              ApiResponsePagination
-                  .<List<TransferResponse>>error("Failed to fetch transfers: " + throwable.getMessage()));
-        });
-  }
-
-  @Override
-  public Future<ApiResponsePagination<List<TransferResponseDeleteAt>>> getActiveTransfers(
-      FindAllTransferRequest req) {
-
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TransferService.getActiveTransfers");
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
-
-    FindAllTransfers domainReq = FindAllTransfers.builder()
-        .page(req.getPage() > 0 ? req.getPage() : 1)
-        .pageSize(req.getPageSize() > 0 ? req.getPageSize() : 10)
-        .search(req.getSearch() != null ? req.getSearch() : "")
-        .build();
-
-    logger.info(
-        "Fetching active transfers | search={}, page={}, pageSize={}",
-        domainReq.getSearch(), domainReq.getPage(), domainReq.getPageSize());
-
-    return repo.getActiveTransfers(domainReq)
-        .map(result -> {
-          ApiResponsePagination<List<TransferResponseDeleteAt>> response = mapTransferPaginationDeleteAt(result,
-              domainReq);
-          span.setAttribute("transfer.count", response.data().size());
-          span.setAttribute("transfer.total_records", response.pagination().totalRecords());
-
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_active", "Active transfers fetched successfully");
-          return response;
-        })
-        .recover(throwable -> {
-          logger.error("Failed to fetch active transfers", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_active", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination
-                  .<List<TransferResponseDeleteAt>>error(
-                      "Failed to fetch active transfers: " + throwable.getMessage()));
-        });
-  }
-
-  @Override
-  public Future<ApiResponsePagination<List<TransferResponseDeleteAt>>> getTrashedTransfers(
-      FindAllTransferRequest req) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TransferService.getTrashedTransfers");
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
-
-    FindAllTransfers domainReq = FindAllTransfers.builder()
-        .page(req.getPage() > 0 ? req.getPage() : 1)
-        .pageSize(req.getPageSize() > 0 ? req.getPageSize() : 10)
-        .search(req.getSearch() != null ? req.getSearch() : "")
-        .build();
-
-    logger.info(
-        "Fetching trashed transfers | search={}, page={}, pageSize={}",
-        domainReq.getSearch(), domainReq.getPage(), domainReq.getPageSize());
-
-    return repo.getTrashedTransfers(domainReq)
-        .map(result -> {
-          ApiResponsePagination<List<TransferResponseDeleteAt>> response = mapTransferPaginationDeleteAt(result,
-              domainReq);
-          span.setAttribute("transfer.count", response.data().size());
-          span.setAttribute("transfer.total_records", response.pagination().totalRecords());
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed", "Trashed transfers fetched successfully");
-          return response;
-        })
-        .recover(throwable -> {
-          logger.error("Failed to fetch trashed transfers", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_trashed", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination
-                  .<List<TransferResponseDeleteAt>>error(
-                      "Failed to fetch trashed transfers: " + throwable.getMessage()));
-        });
-  }
-
-  @Override
-  public Future<ApiResponse<TransferResponse>> getTransferById(Integer transferId) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "TransferService.getTransferById",
-        Attributes.builder()
-            .put("transfer.id", transferId)
-            .build());
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
-
-    logger.info("Fetching transfer by id: {}", transferId);
-    String cacheKey = "transfer:" + transferId;
+    String cacheKey = CACHE_PREFIX + "list:" + req.getSearch() + ":" + req.getPage() + ":" + req.getPageSize();
 
     return redisService.get(cacheKey)
-        .compose(cachedTransfer -> {
-          if (cachedTransfer != null && !cachedTransfer.isEmpty()) {
-            logger.info("Transfer {} found in cache", transferId);
-            span.setAttribute("transfer.cache_hit", true);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
             try {
-              Transfer transfer = Transfer.fromJson(new JsonObject(cachedTransfer));
-              tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Transfer fetched from cache");
-              return Future.succeededFuture(ApiResponse.success(
-                  "Transfer fetched successfully (from cache)",
-                  TransferResponse.from(transfer)));
+              span.setAttribute("cache.hit", true);
+              PagedResult<Transfer> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Transfer>>() {
+              });
+              return Future.succeededFuture(mapTransferPagination(typedCached, req.getPage(), req.getPageSize()));
             } catch (Exception e) {
-              logger.warn("Failed to parse cached transfer data for transfer {}: {}", transferId, e.getMessage());
-              return fetchTransferFromDatabase(transferId, tracingContext);
+              logger.warn("Failed to deserialize cached transfers: {}", e.getMessage());
             }
-          } else {
-            span.setAttribute("transfer.cache_hit", false);
-            return fetchTransferFromDatabase(transferId, tracingContext);
           }
+          span.setAttribute("cache.hit", false);
+          return repo.getTransfers(req)
+              .compose(result -> redisService.setJson(cacheKey, result, CACHE_TTL).map(v -> result))
+              .map(result -> mapTransferPagination(result, req.getPage(), req.getPageSize()));
         })
-        .recover(err -> {
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Transfers fetched successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch transfers", err);
+          tracingMetrics.completeSpanError(tracingContext, "get_all", err.getMessage());
+        });
+  }
+
+  @Override
+  public Future<PagedResult<TransferResponseDeleteAt>> getActiveTransfers(FindAllTransfers req) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getActiveTransfers");
+
+    return repo.getActiveTransfers(req)
+        .map(result -> mapTransferPaginationDeleteAt(result, req.getPage(), req.getPageSize()))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_active",
+            "Active transfers fetched successfully"))
+        .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, "get_active", err.getMessage()));
+  }
+
+  @Override
+  public Future<PagedResult<TransferResponseDeleteAt>> getTrashedTransfers(FindAllTransfers req) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getTrashedTransfers");
+
+    return repo.getTrashedTransfers(req)
+        .map(result -> mapTransferPaginationDeleteAt(result, req.getPage(), req.getPageSize()))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed",
+            "Trashed transfers fetched successfully"))
+        .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, "get_trashed", err.getMessage()));
+  }
+
+  @Override
+  public Future<TransferResponse> getTransferById(Integer transferId) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getTransferById",
+        Attributes.builder().put("transfer.id", (long) transferId).build());
+    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
+
+    String cacheKey = CACHE_PREFIX + transferId;
+
+    return redisService.getJson(cacheKey, Transfer.class)
+        .compose(cached -> {
+          if (cached != null) {
+            span.setAttribute("cache.hit", true);
+            return Future.succeededFuture(TransferResponse.from(cached));
+          }
+          span.setAttribute("cache.hit", false);
+          return repo.getTransferById(transferId)
+              .compose(transfer -> {
+                if (transfer == null) {
+                  return Future.<Transfer>failedFuture(new NotFoundException("Transfer not found"));
+                }
+                return redisService.setJson(cacheKey, transfer, CACHE_TTL).<Transfer>map(v -> transfer);
+              })
+              .map(TransferResponse::from);
+        })
+        .onSuccess(
+            v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Transfer fetched successfully"))
+        .onFailure(err -> {
           logger.error("Failed to fetch transfer by id: {}", transferId, err);
           tracingMetrics.completeSpanError(tracingContext, "get_by_id", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.<TransferResponse>error(
-                  "Failed to fetch transfer: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<List<TransferResponse>>> getTransfersByCardNumber(String cardNumber) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "TransferService.getTransfersByCardNumber",
-        Attributes.builder()
-            .put("transfer.card_number", Objects.requireNonNull(cardNumber))
-            .build());
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
+  public Future<List<TransferResponse>> getTransfersByCardNumber(String cardNumber) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getTransfersByCardNumber",
+        Attributes.builder().put("transfer.card_number", Objects.requireNonNull(cardNumber)).build());
 
-    logger.info("Fetching all transfers for card number: {}", cardNumber);
+    String cacheKey = CACHE_PREFIX + "card_primitive:" + cardNumber;
 
-    return repo.getTransfersByCardNumber(cardNumber)
-        .map(transfers -> {
-          List<TransferResponse> responseList = transfers.stream()
-              .map(TransferResponse::from)
-              .toList();
-          span.setAttribute("transfers.count", responseList.size());
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card", "Transfers for card fetched successfully");
-          return ApiResponse.success("Transfers for card fetched successfully", responseList);
+    return redisService.getJsonList(cacheKey, Transfer.class)
+        .compose(cached -> {
+          if (cached != null && !cached.isEmpty()) {
+            return Future.succeededFuture(cached.stream().map(TransferResponse::from).toList());
+          }
+          return repo.getTransfersByCardNumber(cardNumber)
+              .compose(list -> {
+                if (list == null || list.isEmpty()) {
+                  return Future.succeededFuture(List.<Transfer>of());
+                }
+                return redisService.setJsonList(cacheKey, list, CACHE_TTL).<List<Transfer>>map(v -> list);
+              })
+              .map(list -> list.stream().map(TransferResponse::from).toList());
         })
-        .recover(err -> {
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card",
+            "Transfers for card fetched successfully"))
+        .onFailure(err -> {
           logger.error("Failed to fetch transfers for card number: {}", cardNumber, err);
           tracingMetrics.completeSpanError(tracingContext, "get_by_card", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.<List<TransferResponse>>error("Failed to fetch transfers for card: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<List<TransferResponse>>> getTransfersAsSender(String cardNumber) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "TransferService.getTransfersAsSender",
-        Attributes.builder()
-            .put("transfer.from_card", Objects.requireNonNull(cardNumber))
-            .build());
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
+  public Future<List<TransferResponse>> getTransfersAsSender(String cardNumber) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getTransfersAsSender",
+        Attributes.builder().put("transfer.from_card", Objects.requireNonNull(cardNumber)).build());
 
-    logger.info("Fetching transfers sent from card number: {}", cardNumber);
+    String cacheKey = CACHE_PREFIX + "sender:" + cardNumber;
 
-    return repo.getTransfersBySender(cardNumber)
-        .map(transfers -> {
-          List<TransferResponse> responseList = transfers.stream()
-              .map(TransferResponse::from)
-              .toList();
-          span.setAttribute("transfers.count", responseList.size());
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_as_sender", "Sent transfers fetched successfully");
-          return ApiResponse.success("Sent transfers fetched successfully", responseList);
+    return redisService.getJsonList(cacheKey, Transfer.class)
+        .compose(cached -> {
+          if (cached != null && !cached.isEmpty()) {
+            return Future.succeededFuture(cached.stream().map(TransferResponse::from).toList());
+          }
+          return repo.getTransfersBySender(cardNumber)
+              .compose(list -> {
+                if (list == null || list.isEmpty()) {
+                  return Future.succeededFuture(List.<Transfer>of());
+                }
+                return redisService.setJsonList(cacheKey, list, CACHE_TTL).<List<Transfer>>map(v -> list);
+              })
+              .map(list -> list.stream().map(TransferResponse::from).toList());
         })
-        .recover(err -> {
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_as_sender",
+            "Sent transfers fetched successfully"))
+        .onFailure(err -> {
           logger.error("Failed to fetch sent transfers for card number: {}", cardNumber, err);
           tracingMetrics.completeSpanError(tracingContext, "get_as_sender", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.<List<TransferResponse>>error("Failed to fetch sent transfers: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<List<TransferResponse>>> getTransfersAsReceiver(String cardNumber) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "TransferService.getTransfersAsReceiver",
-        Attributes.builder()
-            .put("transfer.to_card", Objects.requireNonNull(cardNumber))
-            .build());
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
+  public Future<List<TransferResponse>> getTransfersAsReceiver(String cardNumber) {
+    var tracingContext = tracingMetrics.startSpan("TransferQueryService.getTransfersAsReceiver",
+        Attributes.builder().put("transfer.to_card", Objects.requireNonNull(cardNumber)).build());
 
-    logger.info("Fetching transfers received by card number: {}", cardNumber);
+    String cacheKey = CACHE_PREFIX + "receiver:" + cardNumber;
 
-    return repo.getTransfersByReceiver(cardNumber)
-        .map(transfers -> {
-          List<TransferResponse> responseList = transfers.stream()
-              .map(TransferResponse::from)
-              .toList();
-          span.setAttribute("transfers.count", responseList.size());
-          tracingMetrics.completeSpanSuccess(tracingContext, "get_as_receiver",
-              "Received transfers fetched successfully");
-          return ApiResponse.success("Received transfers fetched successfully", responseList);
+    return redisService.getJsonList(cacheKey, Transfer.class)
+        .compose(cached -> {
+          if (cached != null && !cached.isEmpty()) {
+            return Future.succeededFuture(cached.stream().map(TransferResponse::from).toList());
+          }
+          return repo.getTransfersByReceiver(cardNumber)
+              .compose(list -> {
+                if (list == null || list.isEmpty()) {
+                  return Future.succeededFuture(List.<Transfer>of());
+                }
+                return redisService.setJsonList(cacheKey, list, CACHE_TTL).<List<Transfer>>map(v -> list);
+              })
+              .map(list -> list.stream().map(TransferResponse::from).toList());
         })
-        .recover(err -> {
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_as_receiver",
+            "Received transfers fetched successfully"))
+        .onFailure(err -> {
           logger.error("Failed to fetch received transfers for card number: {}", cardNumber, err);
           tracingMetrics.completeSpanError(tracingContext, "get_as_receiver", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.<List<TransferResponse>>error("Failed to fetch received transfers: " + err.getMessage()));
         });
-  }
-
-  private Future<ApiResponse<TransferResponse>> fetchTransferFromDatabase(Integer transferId,
-      TracingMetrics.TracingContext tracingContext) {
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
-
-    return repo.getTransferById(transferId)
-        .compose((Transfer transfer) -> {
-          if (transfer == null) {
-            return Future.failedFuture(new NotFoundException("Transfer not found"));
-          }
-
-          span.setAttribute("transfer.from", Objects.requireNonNull(transfer.getTransferFrom()));
-          span.setAttribute("transfer.to", Objects.requireNonNull(transfer.getTransferTo()));
-
-          String cacheKey = CACHE_PREFIX + transferId;
-          redisService.setJson(cacheKey, transfer.toJson(), CACHE_TTL)
-              .onSuccess(v -> logger.debug("Transfer {} cached successfully", transferId))
-              .onFailure(err -> logger.warn("Failed to cache transfer {}: {}", transferId, err.getMessage()));
-
-          return Future.succeededFuture(ApiResponse.success(
-              "Transfer fetched successfully",
-              TransferResponse.from(transfer)));
-        });
-  }
-
-  private ApiResponsePagination<List<TransferResponse>> mapTransferPagination(
-      PagedResult<Transfer> result,
-      FindAllTransfers req) {
-
-    int pageSize = req.getPageSize();
-    int totalRecords = result.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<TransferResponse> data = result.getData()
-        .stream()
-        .map(TransferResponse::from)
-        .toList();
-
-    return new ApiResponsePagination<>(
-        "success",
-        "Transfers found",
-        data,
-        new PaginationMeta(
-            req.getPage(),
-            pageSize,
-            totalPages,
-            totalRecords));
-  }
-
-  private ApiResponsePagination<List<TransferResponseDeleteAt>> mapTransferPaginationDeleteAt(
-      PagedResult<Transfer> result,
-      FindAllTransfers req) {
-
-    int pageSize = req.getPageSize();
-    int totalRecords = result.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<TransferResponseDeleteAt> data = result.getData()
-        .stream()
-        .map(TransferResponseDeleteAt::from)
-        .toList();
-
-    return new ApiResponsePagination<>(
-        "success",
-        "Transfers found",
-        data,
-        new PaginationMeta(
-            req.getPage(),
-            pageSize,
-            totalPages,
-            totalRecords));
   }
 }

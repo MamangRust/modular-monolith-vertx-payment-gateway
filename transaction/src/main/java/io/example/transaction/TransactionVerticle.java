@@ -3,6 +3,10 @@ package io.example.transaction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.common.chaos.ChaosGrpcServerInterceptor;
+import io.example.common.chaos.ChaosKafkaInterceptor;
+import io.example.common.chaos.ChaosManager;
+import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
@@ -42,8 +46,10 @@ import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.json.JsonObject;
 import io.vertx.grpc.client.GrpcClient;
 import io.vertx.grpc.server.GrpcServer;
@@ -62,17 +68,18 @@ public class TransactionVerticle extends AbstractVerticle {
   private TelemetryConfig telemetryConfig;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
+  private ChaosManager chaosManager;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "localhost")
+            .put("host", "postgres")
             .put("port", 5432)
-            .put("database", "vertxdb")
-            .put("user", "vertx")
-            .put("password", "vertx")
+            .put("database", "PAYMENT_GATEWAY")
+            .put("user", "DRAGON")
+            .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8090)
         .put("card_service_host", "localhost")
@@ -124,12 +131,16 @@ public class TransactionVerticle extends AbstractVerticle {
 
     Pool pool = Pool.pool(vertx, connectOptions, poolOptions);
 
+    this.chaosManager = new ChaosManager();
+    this.chaosManager.startWatcher(vertx);
+    Pool chaosPool = ChaosSqlProxy.wrap(pool, chaosManager, vertx);
+
     // CQRS Repositories
-    TransactionQueryRepository queryRepo = new TransactionQueryRepositoryImpl(pool);
-    TransactionCommandRepository cmdRepo = new TransactionCommandRepositoryImpl(pool);
-    TransactionStatsAmountRepository statsAmtRepo = new TransactionStatsAmountRepositoryImpl(pool);
-    TransactionStatsMethodRepository statsMethRepo = new TransactionStatsMethodRepositoryImpl(pool);
-    TransactionStatsStatusRepository statsStatusRepo = new TransactionStatsStatusRepositoryImpl(pool);
+    TransactionQueryRepository queryRepo = new TransactionQueryRepositoryImpl(chaosPool);
+    TransactionCommandRepository cmdRepo = new TransactionCommandRepositoryImpl(chaosPool);
+    TransactionStatsAmountRepository statsAmtRepo = new TransactionStatsAmountRepositoryImpl(chaosPool);
+    TransactionStatsMethodRepository statsMethRepo = new TransactionStatsMethodRepositoryImpl(chaosPool);
+    TransactionStatsStatusRepository statsStatusRepo = new TransactionStatsStatusRepositoryImpl(chaosPool);
 
     // 3. gRPC Clients Initialize
     this.grpcClient = GrpcClient.client(vertx);
@@ -158,13 +169,16 @@ public class TransactionVerticle extends AbstractVerticle {
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
 
-    // 5. Kafka Setup
+    // 5. Kafka Setup (with chaos interceptor)
     io.vertx.kafka.client.producer.KafkaProducer<String, String> kafkaProducer = KafkaConfig.createProducer(vertx);
-    this.kafkaService = new KafkaService(kafkaProducer);
+    io.vertx.kafka.client.producer.KafkaProducer<String, String> chaosKafkaProducer =
+        ChaosKafkaInterceptor.wrap(kafkaProducer, chaosManager, vertx);
+    this.kafkaService = new KafkaService(chaosKafkaProducer);
 
     // 6. CQRS Services Setup
     TransactionQueryService queryService = new TransactionQueryServiceImpl(queryRepo, redisService, tracingMetrics);
-    TransactionCommandService cmdService = new TransactionCommandServiceImpl(cmdRepo, merchantClientRepo, cardClientRepo, saldoClientRepo, redisService, kafkaService, tracingMetrics);
+    TransactionCommandService cmdService = new TransactionCommandServiceImpl(cmdRepo, queryRepo, merchantClientRepo,
+        cardClientRepo, saldoClientRepo, redisService, kafkaService, tracingMetrics);
     TransactionStatsAmountService statsAmtService = new TransactionStatsAmountServiceImpl(statsAmtRepo, redisService,
         tracingMetrics);
     TransactionStatsMethodService statsMethService = new TransactionStatsMethodServiceImpl(statsMethRepo, redisService,
@@ -223,8 +237,12 @@ public class TransactionVerticle extends AbstractVerticle {
     statsMethHandler.bindAll(grpcServer);
     statsStatusHandler.bindAll(grpcServer);
 
+    // Wrap with gRPC chaos interceptor
+    Handler<HttpServerRequest> chaosHandler =
+        new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
+
     return vertx.createHttpServer()
-        .requestHandler(grpcServer)
+        .requestHandler(chaosHandler)
         .listen(grpcPort)
         .mapEmpty();
   }

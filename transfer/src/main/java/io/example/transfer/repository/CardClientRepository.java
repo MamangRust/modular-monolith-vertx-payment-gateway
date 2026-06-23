@@ -1,16 +1,14 @@
 package io.example.transfer.repository;
 
-import io.example.common.exception.NotFoundException;
+import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.card.Card.*;
 import pb.card.VertxCardQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class CardClientRepository {
   private final VertxCardQueryServiceGrpcClient cardStub;
-
-  public CardClientRepository(VertxCardQueryServiceGrpcClient cardStub) {
-    this.cardStub = cardStub;
-  }
 
   public Future<ApiResponseCard> getCardByCardNumber(String cardNumber) {
     return cardStub.findByCardNumber(FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())

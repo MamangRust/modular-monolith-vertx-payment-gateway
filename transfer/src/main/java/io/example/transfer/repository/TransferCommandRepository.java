@@ -16,9 +16,9 @@ public interface TransferCommandRepository {
 
   Future<Transfer> restoreTransfer(int id);
 
-  Future<Void> deleteTransferPermanently(int id);
+  Future<Boolean> deleteTransferPermanently(int id);
 
-  Future<Void> restoreAllTransfers();
+  Future<Integer> restoreAllTransfers();
 
-  Future<Void> deleteAllPermanentTransfers();
+  Future<Integer> deleteAllPermanentTransfers();
 }

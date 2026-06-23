@@ -7,14 +7,15 @@ import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.example.common.domain.PagedResult;
-import io.example.common.exception.NotFoundException;
-import io.example.common.model.ApiResponse;
-import io.example.common.model.ApiResponsePagination;
-import io.example.common.model.PaginationMeta;
+import io.example.common.exception.api.NotFoundException;
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
 import io.example.topup.domain.requests.topup.FindAllTopups;
+import io.example.topup.domain.requests.topup.FindAllTopupsByCardNumber;
 import io.example.topup.model.Topup;
 import io.example.topup.model.TopupResponse;
 import io.example.topup.model.TopupResponseDeleteAt;
@@ -23,11 +24,12 @@ import io.example.topup.service.TopupQueryService;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonObject;
-import pb.topup.TopupQuery.FindAllTopupRequest;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TopupQueryServiceImpl implements TopupQueryService {
   private static final Logger logger = LoggerFactory.getLogger(TopupQueryServiceImpl.class);
+  private static final ObjectMapper mapper = new ObjectMapper();
 
   private final TopupQueryRepository repo;
   private final RedisService redisService;
@@ -36,268 +38,168 @@ public class TopupQueryServiceImpl implements TopupQueryService {
   private static final String CACHE_PREFIX = "topup:";
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-  public TopupQueryServiceImpl(
-      TopupQueryRepository repo,
-      RedisService redisService,
-      TracingMetrics tracingMetrics) {
-    this.repo = repo;
-    this.redisService = redisService;
-    this.tracingMetrics = tracingMetrics;
+  private PagedResult<TopupResponse> mapTopupPagination(PagedResult<Topup> result, int page, int pageSize) {
+    int totalRecords = result.getTotalRecords();
+    List<TopupResponse> data = result.getData().stream().map(TopupResponse::from).toList();
+    return new PagedResult<>(data, totalRecords);
+  }
+
+  private PagedResult<TopupResponseDeleteAt> mapTopupPaginationDeleteAt(PagedResult<Topup> result, int page,
+      int pageSize) {
+    int totalRecords = result.getTotalRecords();
+    List<TopupResponseDeleteAt> data = result.getData().stream().map(TopupResponseDeleteAt::from).toList();
+    return new PagedResult<>(data, totalRecords);
   }
 
   @Override
-  public Future<ApiResponsePagination<List<TopupResponse>>> getTopups(FindAllTopupRequest req) {
-    String cacheKey = CACHE_PREFIX + "all:" + req.getPage() + ":" + req.getPageSize() + ":" + req.getSearch();
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TopupQueryService.getTopups");
+  public Future<PagedResult<TopupResponse>> getTopups(FindAllTopups req) {
+    var tracingContext = tracingMetrics.startSpan("TopupQueryService.getTopups");
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
+    String cacheKey = CACHE_PREFIX + "list:" + req.getSearch() + ":" + req.getPage() + ":" + req.getPageSize();
+
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("topup.cache_hit", true);
-            JsonObject json = new JsonObject(cached);
-            List<TopupResponse> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupResponse.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Topups fetched successfully (from cache)", data, meta));
-          }
-
-          int page = req.getPage() > 0 ? req.getPage() : 1;
-          int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-          String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
-
-          logger.info("Fetching topups | search={}, page={}, pageSize={}", keyword, page, pageSize);
-
-          FindAllTopups findReq = FindAllTopups.builder()
-              .page(page)
-              .pageSize(pageSize)
-              .search(keyword)
-              .build();
-
-          return repo.getTopups(findReq)
-              .compose(result -> {
-                ApiResponsePagination<List<TopupResponse>> response = mapTopupPagination(result, page, pageSize);
-                return redisService.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL).map(v -> response);
-              })
-              .onSuccess(response -> {
-                span.setAttribute("topups.count", (long) response.data().size());
-                span.setAttribute("topups.total_records", (long) response.pagination().totalRecords());
-                tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Topups fetched successfully");
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              PagedResult<Topup> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Topup>>() {
               });
+              return Future.succeededFuture(mapTopupPagination(typedCached, req.getPage(), req.getPageSize()));
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached topups: {}", e.getMessage());
+            }
+          }
+          span.setAttribute("cache.hit", false);
+          return repo.getTopups(req)
+              .compose(result -> redisService.setJson(cacheKey, result, CACHE_TTL).map(v -> result))
+              .map(result -> mapTopupPagination(result, req.getPage(), req.getPageSize()));
         })
-        .recover(throwable -> {
-          logger.error("Failed to fetch topups", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_all", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch topups: " + throwable.getMessage()));
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_all", "Topups fetched successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch topups", err);
+          tracingMetrics.completeSpanError(tracingContext, "get_all", err.getMessage());
         });
   }
 
   @Override
-  public Future<ApiResponsePagination<List<TopupResponse>>> getActiveTopups(FindAllTopupRequest req) {
-    String cacheKey = CACHE_PREFIX + "active:" + req.getPage() + ":" + req.getPageSize() + ":" + req.getSearch();
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TopupQueryService.getActiveTopups");
+  public Future<PagedResult<TopupResponse>> getTopupsByCardNumber(FindAllTopupsByCardNumber req) {
+    var tracingContext = tracingMetrics.startSpan("TopupQueryService.getTopupsByCardNumber");
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
+    String cacheKey = CACHE_PREFIX + "card:" + req.getCardNumber() + ":" + req.getSearch() + ":" + req.getPage() + ":"
+        + req.getPageSize();
+
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("topup.cache_hit", true);
-            JsonObject json = new JsonObject(cached);
-            List<TopupResponse> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupResponse.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            tracingMetrics.completeSpanSuccess(tracingContext, "get_active", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Active topups fetched successfully (from cache)", data, meta));
-          }
-
-          int page = req.getPage() > 0 ? req.getPage() : 1;
-          int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-          String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
-
-          logger.info("Fetching active topups | search={}, page={}, pageSize={}", keyword, page, pageSize);
-
-          FindAllTopups findReq = FindAllTopups.builder()
-              .page(page)
-              .pageSize(pageSize)
-              .search(keyword)
-              .build();
-
-          return repo.getActiveTopups(findReq)
-              .compose(result -> {
-                ApiResponsePagination<List<TopupResponse>> response = mapTopupPagination(result, page, pageSize);
-                return redisService.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL).map(v -> response);
-              })
-              .onSuccess(response -> {
-                span.setAttribute("topups.count", (long) response.data().size());
-                span.setAttribute("topups.total_records", (long) response.pagination().totalRecords());
-                tracingMetrics.completeSpanSuccess(tracingContext, "get_active", "Active topups fetched successfully");
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              PagedResult<Topup> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Topup>>() {
               });
+              return Future.<PagedResult<TopupResponse>>succeededFuture(
+                  mapTopupPagination(typedCached, req.getPage(), req.getPageSize()));
+            } catch (Exception e) {
+              logger.warn("Failed to deserialize cached topups by card: {}", e.getMessage());
+            }
+          }
+          span.setAttribute("cache.hit", false);
+          Future<PagedResult<TopupResponse>> fromDb = repo
+              .getTopupsByCardNumber(req)
+              .compose(result -> redisService.setJson(cacheKey, result, CACHE_TTL).map(v -> result))
+              .map(result -> mapTopupPagination(result, req.getPage(), req.getPageSize()));
+
+          return fromDb;
         })
-        .recover(throwable -> {
-          logger.error("Failed to fetch active topups", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_active", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch active topups: " + throwable.getMessage()));
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card",
+            "Topups by card fetched successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch topups for card: {}", req.getCardNumber(), err);
+          tracingMetrics.completeSpanError(tracingContext, "get_by_card", err.getMessage());
         });
   }
 
   @Override
-  public Future<ApiResponsePagination<List<TopupResponseDeleteAt>>> getTrashedTopups(FindAllTopupRequest req) {
-    String cacheKey = CACHE_PREFIX + "trashed:" + req.getPage() + ":" + req.getPageSize() + ":" + req.getSearch();
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TopupQueryService.getTrashedTopups");
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
+  public Future<PagedResult<TopupResponseDeleteAt>> getActiveTopups(FindAllTopups req) {
+    var tracingContext = tracingMetrics.startSpan("TopupQueryService.getActiveTopups");
 
-    return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("topup.cache_hit", true);
-            JsonObject json = new JsonObject(cached);
-            List<TopupResponseDeleteAt> data = json.getJsonArray("data").stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupResponseDeleteAt.class)).toList();
-            PaginationMeta meta = json.getJsonObject("pagination").mapTo(PaginationMeta.class);
-            tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed", "Success (from cache)");
-            return Future.succeededFuture(new ApiResponsePagination<>("success", "Trashed topups fetched successfully (from cache)", data, meta));
-          }
-
-          int page = req.getPage() > 0 ? req.getPage() : 1;
-          int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
-          String keyword = (req.getSearch() != null && !req.getSearch().isEmpty()) ? req.getSearch() : "";
-
-          logger.info("Fetching trashed topups | search={}, page={}, pageSize={}", keyword, page, pageSize);
-
-          FindAllTopups findReq = FindAllTopups.builder()
-              .page(page)
-              .pageSize(pageSize)
-              .search(keyword)
-              .build();
-
-          return repo.getTrashedTopups(findReq)
-              .compose(result -> {
-                ApiResponsePagination<List<TopupResponseDeleteAt>> response = mapTopupPaginationDeleteAt(result, page, pageSize);
-                return redisService.setJson(cacheKey, JsonObject.mapFrom(response), CACHE_TTL).map(v -> response);
-              })
-              .onSuccess(response -> {
-                span.setAttribute("topups.count", (long) response.data().size());
-                span.setAttribute("topups.total_records", (long) response.pagination().totalRecords());
-                tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed", "Trashed topups fetched successfully");
-              });
-        })
-        .recover(throwable -> {
-          logger.error("Failed to fetch trashed topups", throwable);
-          tracingMetrics.completeSpanError(tracingContext, "get_trashed", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponsePagination.error("Failed to fetch trashed topups: " + throwable.getMessage()));
-        });
+    return repo.getActiveTopups(req)
+        .map(result -> mapTopupPaginationDeleteAt(result, req.getPage(), req.getPageSize()))
+        .onSuccess(
+            v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_active", "Active topups fetched successfully"))
+        .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, "get_active", err.getMessage()));
   }
 
   @Override
-  public Future<ApiResponse<TopupResponse>> getTopupById(Integer topupId) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "TopupQueryService.getTopupById",
-        Attributes.builder()
-            .put("topup.id", (long) topupId)
-            .build());
+  public Future<PagedResult<TopupResponseDeleteAt>> getTrashedTopups(FindAllTopups req) {
+    var tracingContext = tracingMetrics.startSpan("TopupQueryService.getTrashedTopups");
+
+    return repo.getTrashedTopups(req)
+        .map(result -> mapTopupPaginationDeleteAt(result, req.getPage(), req.getPageSize()))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_trashed",
+            "Trashed topups fetched successfully"))
+        .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, "get_trashed", err.getMessage()));
+  }
+
+  @Override
+  public Future<TopupResponse> getTopupById(Integer topupId) {
+    var tracingContext = tracingMetrics.startSpan("TopupQueryService.getTopupById",
+        Attributes.builder().put("topup.id", (long) topupId).build());
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
 
-    logger.info("Fetching topup by id: {}", topupId);
     String cacheKey = CACHE_PREFIX + topupId;
 
-    return redisService.get(cacheKey)
-        .compose(cachedTopup -> {
-          if (cachedTopup != null && !cachedTopup.isEmpty()) {
-            logger.info("Topup {} found in cache", topupId);
-            span.setAttribute("topup.cache_hit", true);
-            try {
-              Topup topup = Topup.fromJson(new JsonObject(cachedTopup));
-              tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Topup fetched from cache");
-              return Future.succeededFuture(ApiResponse.success(
-                  "Topup fetched successfully (from cache)",
-                  TopupResponse.from(topup)));
-            } catch (Exception e) {
-              logger.warn("Failed to parse cached topup data for topup {}: {}", topupId, e.getMessage());
-              return fetchTopupFromDatabase(topupId, tracingContext);
-            }
-          } else {
-            span.setAttribute("topup.cache_hit", false);
-            return fetchTopupFromDatabase(topupId, tracingContext);
+    return redisService.getJson(cacheKey, Topup.class)
+        .compose(cached -> {
+          if (cached != null) {
+            span.setAttribute("cache.hit", true);
+            return Future.succeededFuture(TopupResponse.from(cached));
           }
+          span.setAttribute("cache.hit", false);
+          return repo.getTopupById(topupId)
+              .compose(topup -> {
+                if (topup == null) {
+                  return Future.<Topup>failedFuture(new NotFoundException("Topup not found"));
+                }
+                return redisService.setJson(cacheKey, topup, CACHE_TTL).<Topup>map(v -> topup);
+              })
+              .map(TopupResponse::from);
         })
-        .recover(err -> {
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_id", "Topup fetched successfully"))
+        .onFailure(err -> {
           logger.error("Failed to fetch topup by id: {}", topupId, err);
           tracingMetrics.completeSpanError(tracingContext, "get_by_id", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.error("Failed to fetch topup: " + err.getMessage()));
         });
   }
 
-  private Future<ApiResponse<TopupResponse>> fetchTopupFromDatabase(Integer topupId,
-      TracingMetrics.TracingContext tracingContext) {
-    Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
+  @Override
+  public Future<TopupResponse> getTopupByCardNumber(String cardNumber) {
+    var tracingContext = tracingMetrics.startSpan("TopupQueryService.getTopupByCardNumber",
+        Attributes.builder().put("topup.card_number", Objects.requireNonNull(cardNumber)).build());
 
-    return repo.getTopupById(topupId)
-        .compose((Topup topup) -> {
+    String cacheKey = CACHE_PREFIX + "card_single:" + cardNumber;
+
+    return redisService.getJson(cacheKey, Topup.class)
+        .compose(cached -> fetchTopupFromCacheOrDb(cardNumber, cacheKey, cached))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "get_by_card_single", "Topup found"))
+        .onFailure(err -> {
+          logger.error("Failed to fetch topup for card: {}", cardNumber, err);
+          tracingMetrics.completeSpanError(tracingContext, "get_by_card_single", err.getMessage());
+        });
+  }
+
+  private Future<TopupResponse> fetchTopupFromCacheOrDb(String cardNumber, String cacheKey, Topup cached) {
+    if (cached != null) {
+      return Future.succeededFuture(TopupResponse.from(cached));
+    }
+
+    return repo.getTopupByCardNumber(cardNumber)
+        .compose(topup -> {
           if (topup == null) {
-            return Future.failedFuture(new NotFoundException("Topup not found"));
+            return Future.failedFuture(new NotFoundException("Topup not found for card: " + cardNumber));
           }
-
-          span.setAttribute("topup.card_number", Objects.requireNonNull(topup.getCardNumber()));
-
-          String cacheKey = CACHE_PREFIX + topupId;
-          redisService.setJson(cacheKey, topup.toJson(), CACHE_TTL)
-              .onSuccess(v -> logger.debug("Topup {} cached successfully", topupId))
-              .onFailure(err -> logger.warn("Failed to cache topup {}: {}", topupId, err.getMessage()));
-
-          return Future.succeededFuture(ApiResponse.success(
-              "Topup fetched successfully",
-              TopupResponse.from(topup)));
-        });
-  }
-
-  private ApiResponsePagination<List<TopupResponse>> mapTopupPagination(
-      PagedResult<Topup> result,
-      int page,
-      int pageSize) {
-
-    int totalRecords = result.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<TopupResponse> data = result.getData()
-        .stream()
-        .map(TopupResponse::from)
-        .toList();
-
-    return new ApiResponsePagination<>(
-        "success",
-        "Topups found",
-        data,
-        new PaginationMeta(
-            page,
-            pageSize,
-            totalPages,
-            totalRecords));
-  }
-
-  private ApiResponsePagination<List<TopupResponseDeleteAt>> mapTopupPaginationDeleteAt(
-      PagedResult<Topup> result,
-      int page,
-      int pageSize) {
-
-    int totalRecords = result.getTotalRecords();
-    int totalPages = (int) Math.ceil((double) totalRecords / pageSize);
-    List<TopupResponseDeleteAt> data = result.getData()
-        .stream()
-        .map(TopupResponseDeleteAt::from)
-        .toList();
-
-    return new ApiResponsePagination<>(
-        "success",
-        "Trashed topups found",
-        data,
-        new PaginationMeta(
-            page,
-            pageSize,
-            totalPages,
-            totalRecords));
+          return redisService.setJson(cacheKey, topup, CACHE_TTL).map(v -> topup);
+        })
+        .map(TopupResponse::from);
   }
 }

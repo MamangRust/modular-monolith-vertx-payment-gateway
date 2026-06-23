@@ -2,23 +2,22 @@ package io.example.merchant.repository.impl;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import io.example.common.domain.PagedResult;
 import io.example.merchant.model.MerchantTransactions;
 import io.example.merchant.repository.MerchantTransactionRepository;
-import io.example.common.domain.PagedResult;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 import pb.merchant.Merchant.FindAllMerchantTransaction;
 import pb.merchant.Merchant.FindAllMerchantTransactionApikey;
 import pb.merchant.Merchant.FindAllMerchantTransactionId;
 
+@RequiredArgsConstructor
 public class MerchantTransactionRepositoryImpl implements MerchantTransactionRepository {
   private final Pool pool;
-
-  public MerchantTransactionRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String normalizeSearch(String search) {
     return (search == null || search.isBlank()) ? null : search;
@@ -65,7 +64,8 @@ public class MerchantTransactionRepositoryImpl implements MerchantTransactionRep
             list.add(MerchantTransactions.fromRow(row));
             if (total == 0) {
               Integer tc = row.getInteger("total_count");
-              if (tc != null) total = tc;
+              if (tc != null)
+                total = tc;
             }
           }
           return new PagedResult<>(list, total);
@@ -114,7 +114,8 @@ public class MerchantTransactionRepositoryImpl implements MerchantTransactionRep
             list.add(MerchantTransactions.fromRow(row));
             if (total == 0) {
               Integer tc = row.getInteger("total_count");
-              if (tc != null) total = tc;
+              if (tc != null)
+                total = tc;
             }
           }
           return new PagedResult<>(list, total);
@@ -122,7 +123,8 @@ public class MerchantTransactionRepositoryImpl implements MerchantTransactionRep
   }
 
   @Override
-  public Future<PagedResult<MerchantTransactions>> findAllTransactionByApikey(FindAllMerchantTransactionApikey request) {
+  public Future<PagedResult<MerchantTransactions>> findAllTransactionByApikey(
+      FindAllMerchantTransactionApikey request) {
     int pageSize = request.getPageSize() > 0 ? request.getPageSize() : 10;
     int offset = Math.max(0, request.getPage() - 1) * pageSize;
     String search = normalizeSearch(request.getSearch());
@@ -163,7 +165,8 @@ public class MerchantTransactionRepositoryImpl implements MerchantTransactionRep
             list.add(MerchantTransactions.fromRow(row));
             if (total == 0) {
               Integer tc = row.getInteger("total_count");
-              if (tc != null) total = tc;
+              if (tc != null)
+                total = tc;
             }
           }
           return new PagedResult<>(list, total);

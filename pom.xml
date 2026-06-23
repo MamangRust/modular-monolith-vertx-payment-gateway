@@ -23,6 +23,7 @@
     <module>transfer</module>
     <module>user</module>
     <module>withdraw</module>
+    <module>db-migration</module>
   </modules>
 
   <properties>

@@ -5,25 +5,22 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 
+import io.example.topup.domain.requests.topup.MonthTopupStatusCardNumberRequest;
+import io.example.topup.domain.requests.topup.YearTopupStatusCardNumberRequest;
 import io.example.topup.model.TopupStats;
 import io.example.topup.repository.TopupStatsByCardStatusRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
-import pb.topup.Topup.FindMonthlyTopupStatusCardNumber;
-import pb.topup.Topup.FindYearTopupStatusCardNumber;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TopupStatsByCardStatusRepositoryImpl implements TopupStatsByCardStatusRepository {
   private final Pool pool;
 
-  public TopupStatsByCardStatusRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
-
   @Override
-  public Future<List<TopupStats.MonthStatus>> getMonthlyTopupStatusByCard(FindMonthlyTopupStatusCardNumber req,
-      String status) {
+  public Future<List<TopupStats.MonthStatus>> getMonthlyTopupStatusByCard(MonthTopupStatusCardNumberRequest req) {
     int year = req.getYear();
     int month = req.getMonth();
     String card = req.getCardNumber();
@@ -31,7 +28,7 @@ public class TopupStatsByCardStatusRepositoryImpl implements TopupStatsByCardSta
     OffsetDateTime prev = curr.minusMonths(1);
     OffsetDateTime endCurr = curr.plusMonths(1).minusNanos(1);
     OffsetDateTime endPrev = curr.minusNanos(1);
-    String countCol = "total_" + status;
+    String countCol = "total_" + req.getStatus();
 
     String sql = String.format(
         """
@@ -52,7 +49,7 @@ public class TopupStatsByCardStatusRepositoryImpl implements TopupStatsByCardSta
             """,
         countCol, countCol);
 
-    return pool.preparedQuery(sql).execute(Tuple.of(status, card, curr, endCurr, prev, endPrev))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getStatus(), card, curr, endCurr, prev, endPrev))
         .map(rows -> {
           List<TopupStats.MonthStatus> list = new ArrayList<>();
           for (Row r : rows)
@@ -62,10 +59,10 @@ public class TopupStatsByCardStatusRepositoryImpl implements TopupStatsByCardSta
   }
 
   @Override
-  public Future<List<TopupStats.YearStatus>> getYearlyTopupStatusByCard(FindYearTopupStatusCardNumber req, String status) {
+  public Future<List<TopupStats.YearStatus>> getYearlyTopupStatusByCard(YearTopupStatusCardNumberRequest req) {
     int year = req.getYear();
     String card = req.getCardNumber();
-    String countCol = "total_" + status;
+    String countCol = "total_" + req.getStatus();
     String sql = String.format(
         """
             WITH yearly_data AS (
@@ -83,7 +80,7 @@ public class TopupStatsByCardStatusRepositoryImpl implements TopupStatsByCardSta
             """,
         countCol, countCol);
 
-    return pool.preparedQuery(sql).execute(Tuple.of(status, card, year))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getStatus(), card, year))
         .map(rows -> {
           List<TopupStats.YearStatus> list = new ArrayList<>();
           for (Row r : rows)

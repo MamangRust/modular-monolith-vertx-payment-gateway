@@ -2,7 +2,9 @@ package io.example.saldo.repository.impl;
 
 import java.util.ArrayList;
 import java.util.List;
+
 import io.example.common.domain.PagedResult;
+import io.example.saldo.domain.requests.FindAllSaldos;
 import io.example.saldo.model.Saldo;
 import io.example.saldo.repository.SaldoQueryRepository;
 import io.vertx.core.Future;
@@ -10,26 +12,22 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
-import io.example.saldo.domain.requests.FindAllSaldos;
-
+@RequiredArgsConstructor
 public class SaldoQueryRepositoryImpl implements SaldoQueryRepository {
   private final Pool client;
-
-  public SaldoQueryRepositoryImpl(Pool client) {
-    this.client = client;
-  }
 
   @Override
   public Future<PagedResult<Saldo>> getSaldos(FindAllSaldos req) {
     int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
     int offset = Math.max(0, req.getPage() - 1) * pageSize;
     return client.preparedQuery("""
-            SELECT *, COUNT(*) OVER() AS total_count
-            FROM saldos
-            WHERE deleted_at IS NULL AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%')
-            ORDER BY saldo_id LIMIT $2 OFFSET $3
-            """)
+        SELECT *, COUNT(*) OVER() AS total_count
+        FROM saldos
+        WHERE deleted_at IS NULL AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%')
+        ORDER BY saldo_id LIMIT $2 OFFSET $3
+        """)
         .execute(Tuple.of(normalize(req.getSearch()), pageSize, offset))
         .map(this::mapPagedSaldos);
   }
@@ -44,11 +42,11 @@ public class SaldoQueryRepositoryImpl implements SaldoQueryRepository {
     int pageSize = req.getPageSize() > 0 ? req.getPageSize() : 10;
     int offset = Math.max(0, req.getPage() - 1) * pageSize;
     return client.preparedQuery("""
-            SELECT *, COUNT(*) OVER() AS total_count
-            FROM saldos
-            WHERE deleted_at IS NOT NULL AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%')
-            ORDER BY saldo_id LIMIT $2 OFFSET $3
-            """)
+        SELECT *, COUNT(*) OVER() AS total_count
+        FROM saldos
+        WHERE deleted_at IS NOT NULL AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%')
+        ORDER BY saldo_id LIMIT $2 OFFSET $3
+        """)
         .execute(Tuple.of(normalize(req.getSearch()), pageSize, offset))
         .map(this::mapPagedSaldos);
   }
@@ -56,6 +54,13 @@ public class SaldoQueryRepositoryImpl implements SaldoQueryRepository {
   @Override
   public Future<Saldo> getSaldoById(Integer id) {
     return client.preparedQuery("SELECT * FROM saldos WHERE saldo_id = $1 AND deleted_at IS NULL")
+        .execute(Tuple.of(id))
+        .map(this::mapSingle);
+  }
+
+  @Override
+  public Future<Saldo> findByTrashedId(Integer id) {
+    return client.preparedQuery("SELECT * FROM saldos WHERE saldo_id = $1 AND deleted_at IS NOT NULL")
         .execute(Tuple.of(id))
         .map(this::mapSingle);
   }

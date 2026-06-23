@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: payment-gateway
+
+resources:
+- common/
+- postgres/
+- pgbouncer/
+- redis/
+- kafka/
+- db-migration/
+- apigateway/
+- auth/
+- user/
+- role/
+- card/
+- merchant/
+- saldo/
+- topup/
+- transfer/
+- withdraw/
+- transaction/
+- email/
+- nginx/
+- observability/

@@ -3,7 +3,7 @@ package io.example.merchant.repository;
 import io.example.common.domain.PagedResult;
 import io.example.merchant.model.Merchant;
 import io.vertx.core.Future;
-import pb.merchant.Merchant.FindAllMerchantRequest;;
+import pb.merchant.Merchant.FindAllMerchantRequest;
 
 public interface MerchantQueryRepository {
   Future<PagedResult<Merchant>> findAllMerchants(FindAllMerchantRequest request);
@@ -14,9 +14,13 @@ public interface MerchantQueryRepository {
 
   Future<Merchant> findByApiKey(String apiKey);
 
-  Future<Merchant> findByMerchantId(int merchantId);
+  Future<Merchant> findByMerchantId(Integer merchantId);
 
   Future<Merchant> findByName(String name);
 
-  Future<java.util.List<Merchant>> findByMerchantUserId(int userId);
+  Future<Merchant> findByTrashedById(Integer merchantId);
+
+  Future<Merchant> findByRestoredById(Integer merchantId);
+
+  Future<java.util.List<Merchant>> findByMerchantUserId(Integer userId);
 }

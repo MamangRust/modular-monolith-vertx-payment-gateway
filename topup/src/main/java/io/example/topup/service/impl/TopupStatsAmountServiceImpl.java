@@ -2,120 +2,139 @@ package io.example.topup.service.impl;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.example.common.observability.TracingMetrics;
 import io.example.common.service.RedisService;
+import io.example.topup.domain.requests.topup.YearTopupCardNumberRequest;
+import io.example.topup.domain.requests.topup.YearTopupRequest;
 import io.example.topup.model.TopupStats;
 import io.example.topup.repository.TopupStatsAmountRepository;
 import io.example.topup.repository.TopupStatsByCardAmountRepository;
 import io.example.topup.service.TopupStatsAmountService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
-import pb.topup.Topup.FindYearTopupCardNumber;
-import pb.topup.Topup.FindYearTopupStatus;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class TopupStatsAmountServiceImpl implements TopupStatsAmountService {
   private final TopupStatsAmountRepository repository;
   private final TopupStatsByCardAmountRepository cardRepository;
   private final RedisService redis;
   private final TracingMetrics metrics;
+  private static final ObjectMapper mapper = new ObjectMapper();
 
   private static final String CACHE_PREFIX = "topup:stats:amount:";
   private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-  public TopupStatsAmountServiceImpl(
-      TopupStatsAmountRepository repository,
-      TopupStatsByCardAmountRepository cardRepository,
-      RedisService redis,
-      TracingMetrics metrics) {
-    this.repository = repository;
-    this.cardRepository = cardRepository;
-    this.redis = redis;
-    this.metrics = metrics;
-  }
-
   @Override
-  public Future<List<TopupStats.MonthAmount>> getMonthlyTopupAmounts(FindYearTopupStatus req) {
+  public Future<List<TopupStats.MonthAmount>> getMonthlyTopupAmounts(YearTopupRequest req) {
     String cacheKey = CACHE_PREFIX + "monthly:" + req.getYear();
     var ctx = metrics.startSpan("TopupStatsAmountService.getMonthlyTopupAmounts");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TopupStats.MonthAmount> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupStats.MonthAmount.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getMonthlyTopupAmounts", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TopupStats.MonthAmount>>() {
+              });
+              return Future.<List<TopupStats.MonthAmount>>succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
-          return repository.getMonthlyTopupAmounts(req)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTopupAmounts", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTopupAmounts", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TopupStats.MonthAmount>> fromDb = repository.getMonthlyTopupAmounts(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTopupAmounts", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTopupAmounts", e.getMessage()));
   }
 
   @Override
-  public Future<List<TopupStats.YearAmount>> getYearlyTopupAmounts(FindYearTopupStatus req) {
+  public Future<List<TopupStats.YearAmount>> getYearlyTopupAmounts(YearTopupRequest req) {
     String cacheKey = CACHE_PREFIX + "yearly:" + req.getYear();
     var ctx = metrics.startSpan("TopupStatsAmountService.getYearlyTopupAmounts");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TopupStats.YearAmount> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupStats.YearAmount.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getYearlyTopupAmounts", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TopupStats.YearAmount>>() {
+              });
+              return Future.<List<TopupStats.YearAmount>>succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
-          return repository.getYearlyTopupAmounts(req)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTopupAmounts", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTopupAmounts", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TopupStats.YearAmount>> fromDb = repository.getYearlyTopupAmounts(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTopupAmounts", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTopupAmounts", e.getMessage()));
   }
 
   @Override
-  public Future<List<TopupStats.MonthAmount>> getMonthlyTopupAmountsByCard(FindYearTopupCardNumber req) {
+  public Future<List<TopupStats.MonthAmount>> getMonthlyTopupAmountsByCard(YearTopupCardNumberRequest req) {
     String cacheKey = CACHE_PREFIX + "monthly:card:" + req.getCardNumber() + ":" + req.getYear();
     var ctx = metrics.startSpan("TopupStatsAmountService.getMonthlyTopupAmountsByCard");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TopupStats.MonthAmount> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupStats.MonthAmount.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getMonthlyTopupAmountsByCard", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TopupStats.MonthAmount>>() {
+              });
+              return Future.<List<TopupStats.MonthAmount>>succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
-          return cardRepository.getMonthlyTopupAmountsByCard(req)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTopupAmountsByCard", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTopupAmountsByCard", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TopupStats.MonthAmount>> fromDb = cardRepository.getMonthlyTopupAmountsByCard(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyTopupAmountsByCard", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyTopupAmountsByCard", e.getMessage()));
   }
 
   @Override
-  public Future<List<TopupStats.YearAmount>> getYearlyTopupAmountsByCard(FindYearTopupCardNumber req) {
+  public Future<List<TopupStats.YearAmount>> getYearlyTopupAmountsByCard(YearTopupCardNumberRequest req) {
     String cacheKey = CACHE_PREFIX + "yearly:card:" + req.getCardNumber() + ":" + req.getYear();
     var ctx = metrics.startSpan("TopupStatsAmountService.getYearlyTopupAmountsByCard");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
 
     return redis.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null) {
-            List<TopupStats.YearAmount> list = new JsonArray(cached).stream()
-                .map(o -> ((JsonObject) o).mapTo(TopupStats.YearAmount.class))
-                .toList();
-            metrics.completeSpanSuccess(ctx, "getYearlyTopupAmountsByCard", "Success (from cache)");
-            return Future.succeededFuture(list);
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("cache.hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<TopupStats.YearAmount>>() {
+              });
+              return Future.<List<TopupStats.YearAmount>>succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
           }
-          return cardRepository.getYearlyTopupAmountsByCard(req)
-              .compose(res -> redis.setJson(cacheKey, new JsonArray(res), CACHE_TTL).map(v -> res))
-              .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTopupAmountsByCard", "Success"))
-              .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTopupAmountsByCard", e.getMessage()));
-        });
+          span.setAttribute("cache.hit", false);
+
+          Future<List<TopupStats.YearAmount>> fromDb = cardRepository.getYearlyTopupAmountsByCard(req)
+              .compose(res -> redis.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
+          return fromDb;
+        })
+        .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyTopupAmountsByCard", "Success"))
+        .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyTopupAmountsByCard", e.getMessage()));
   }
 }

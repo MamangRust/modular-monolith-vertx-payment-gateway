@@ -1,28 +1,34 @@
 package io.example.saldo.repository;
 
-import io.example.common.exception.NotFoundException;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.card.Card.ApiResponseCard;
+import pb.card.Card.CardWithEmailResponse;
+import pb.card.Card.FindByCardNumberRequest;
 import pb.card.VertxCardQueryServiceGrpcClient;
+import io.example.common.exception.grpc.NotFoundException;
 
+@RequiredArgsConstructor
 public class CardClientRepository {
   private final VertxCardQueryServiceGrpcClient cardStub;
 
-  public CardClientRepository(VertxCardQueryServiceGrpcClient cardStub) {
-    this.cardStub = cardStub;
-  }
-
   public Future<ApiResponseCard> getCardByCardNumber(String cardNumber) {
-    // FindByCardNumber seems appropriate if it exists, otherwise we use what's
-    // available
-    // Let's assume FindByCardNumber exists based on monolithic
-    // repoCard.getCardByCardNumber
-    // If not, I'll check the proto.
     return cardStub
-        .findByCardNumber(pb.card.Card.FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
+        .findByCardNumber(FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {
             return Future.failedFuture(new NotFoundException(resp.getMessage()));
+          }
+          return Future.succeededFuture(resp);
+        });
+  }
+
+  public Future<CardWithEmailResponse> findUserCardByCardNumber(String cardNumber) {
+    return cardStub
+        .findUserCardByCardNumber(FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
+        .compose(resp -> {
+          if (resp.getEmail() == null || resp.getEmail().isEmpty()) {
+            return Future.failedFuture(new NotFoundException("Card user not found"));
           }
           return Future.succeededFuture(resp);
         });

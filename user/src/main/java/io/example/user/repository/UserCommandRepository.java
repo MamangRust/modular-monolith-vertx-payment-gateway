@@ -1,16 +1,27 @@
 package io.example.user.repository;
 
+import io.example.user.domain.requests.CreateUserRequest;
+import io.example.user.domain.requests.UpdatePasswordRequest;
+import io.example.user.domain.requests.UpdateUserRequest;
 import io.example.user.model.User;
 import io.vertx.core.Future;
 
 public interface UserCommandRepository {
-  Future<User> createUser(String firstname, String lastname, String email, String password);
+  Future<User> createUser(CreateUserRequest request);
+
   Future<Void> assignDefaultAdminRole(Integer userId);
-  Future<User> updateUser(Integer userId, String firstname, String lastname, String email);
-  Future<User> updatePassword(Integer userId, String password);
+
+  Future<User> updateUser(UpdateUserRequest request);
+
+  Future<User> updatePassword(UpdatePasswordRequest request);
+
   Future<User> restore(Integer userId);
+
   Future<User> trashed(Integer userId);
-  Future<Void> deletePermanent(Integer userId);
-  Future<Void> restoreAllUsers();
-  Future<Void> deleteAllPermanentUsers();
+
+  Future<Boolean> deletePermanent(Integer userId);
+
+  Future<Integer> restoreAllUsers();
+
+  Future<Integer> deleteAllPermanentUsers();
 }

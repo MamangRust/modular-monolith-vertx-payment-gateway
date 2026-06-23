@@ -12,14 +12,12 @@ import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowSet;
 import io.vertx.sqlclient.Tuple;
-import pb.card.Card.FindAllCardRequest;;
+import lombok.RequiredArgsConstructor;
+import pb.card.Card.FindAllCardRequest;
 
+@RequiredArgsConstructor
 public class CardQueryRepositoryImpl implements CardQueryRepository {
   private final Pool pool;
-
-  public CardQueryRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   private String normalizeSearch(String search) {
     return (search == null || search.isBlank()) ? null : search;
@@ -117,6 +115,7 @@ public class CardQueryRepositoryImpl implements CardQueryRepository {
         .map(this::mapSingleOrNull);
   }
 
+  @Override
   public Future<CardEmail> getCardEmailByCardNumber(String cardNumber) {
     return pool
         .preparedQuery(
@@ -128,6 +127,18 @@ public class CardQueryRepositoryImpl implements CardQueryRepository {
                 """)
         .execute(Tuple.of(cardNumber))
         .map(rows -> rows.iterator().hasNext() ? CardEmail.fromRow(rows.iterator().next()) : null);
+  }
+
+  @Override
+  public Future<Card> findByTrashId(Integer cardId) {
+    return pool
+        .preparedQuery(
+            """
+                SELECT card_id AS id, user_id, card_number, card_type, expire_date, cvv, card_provider, created_at, updated_at, deleted_at
+                FROM cards WHERE card_id = $1 AND deleted_at IS NOT NULL
+                """)
+        .execute(Tuple.of(cardId))
+        .map(this::mapSingleOrNull);
   }
 
   private Card mapSingleOrNull(RowSet<Row> rows) {

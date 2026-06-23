@@ -3,7 +3,8 @@ package io.example.merchant.repository;
 import io.vertx.core.Future;
 import pb.user.User;
 import pb.user.VertxUserQueryServiceGrpcClient;
-import io.example.merchant.exception.NotFoundException;
+
+import io.example.common.exception.grpc.NotFoundException;
 
 public class UserClientRepository {
   private final VertxUserQueryServiceGrpcClient client;

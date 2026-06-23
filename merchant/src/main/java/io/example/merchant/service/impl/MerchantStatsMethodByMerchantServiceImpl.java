@@ -1,67 +1,76 @@
 package io.example.merchant.service.impl;
 
-import java.util.List;
 import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.example.common.observability.TracingMetrics;
+import io.example.common.service.RedisService;
+import io.example.merchant.domain.requests.merchant.MonthYearPaymentMethodMerchant;
 import io.example.merchant.model.MerchantStats;
 import io.example.merchant.repository.MerchantStatsMethodByMerchantRepository;
 import io.example.merchant.service.MerchantStatsMethodByMerchantService;
-import io.example.common.observability.TracingMetrics;
-import io.example.common.service.RedisService;
+import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
-import io.vertx.core.json.JsonArray;
-import io.vertx.core.json.JsonObject;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MerchantStatsMethodByMerchantServiceImpl implements MerchantStatsMethodByMerchantService {
   private final MerchantStatsMethodByMerchantRepository repository;
   private final RedisService redisService;
   private final TracingMetrics metrics;
+  private static final ObjectMapper mapper = new ObjectMapper();
   private static final String CACHE_PREFIX = "stats:method:merchant:";
-
-  public MerchantStatsMethodByMerchantServiceImpl(MerchantStatsMethodByMerchantRepository repository, RedisService redisService, TracingMetrics metrics) {
-    this.repository = repository;
-    this.redisService = redisService;
-    this.metrics = metrics;
-  }
+  private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
   @Override
-  public Future<List<MerchantStats.MonthMethod>> getMonthlyMethodAmounts(pb.merchant.Merchant.FindYearMerchantById req) {
+  public Future<List<MerchantStats.MonthMethod>> getMonthlyMethodAmounts(MonthYearPaymentMethodMerchant req) {
     var ctx = metrics.startSpan("MerchantStatsMethodByMerchantService.getMonthlyMethodAmounts");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
     String cacheKey = CACHE_PREFIX + "monthly:" + req.getMerchantId() + ":" + req.getYear();
 
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            List<MerchantStats.MonthMethod> list = new JsonArray(cached).stream()
-                .map(o -> MerchantStats.MonthMethod.fromJson((JsonObject) o)).toList();
-            return Future.succeededFuture(list);
-          }
-          return repository.getMonthlyPaymentMethodByMerchants(req)
-              .onSuccess(list -> {
-                JsonArray arr = new JsonArray(list.stream().map(MerchantStats.MonthMethod::toJson).toList());
-                redisService.setJson(cacheKey, arr, Duration.ofMinutes(10));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("merchant_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<MerchantStats.MonthMethod>>() {
               });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("merchant_stats.cache_hit", false);
+          return repository.getMonthlyPaymentMethodByMerchants(req)
+              .compose(res -> redisService.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getMonthlyMethodAmounts", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getMonthlyMethodAmounts", e.getMessage()));
   }
 
   @Override
-  public Future<List<MerchantStats.YearMethod>> getYearlyMethodAmounts(pb.merchant.Merchant.FindYearMerchantById req) {
+  public Future<List<MerchantStats.YearMethod>> getYearlyMethodAmounts(MonthYearPaymentMethodMerchant req) {
     var ctx = metrics.startSpan("MerchantStatsMethodByMerchantService.getYearlyMethodAmounts");
+    Span span = Span.fromContext(Objects.requireNonNull(ctx.getContext()));
     String cacheKey = CACHE_PREFIX + "yearly:" + req.getMerchantId() + ":" + req.getYear();
 
     return redisService.get(cacheKey)
-        .compose(cached -> {
-          if (cached != null && !cached.isEmpty()) {
-            List<MerchantStats.YearMethod> list = new JsonArray(cached).stream()
-                .map(o -> MerchantStats.YearMethod.fromJson((JsonObject) o)).toList();
-            return Future.succeededFuture(list);
-          }
-          return repository.getYearlyPaymentMethodByMerchants(req)
-              .onSuccess(list -> {
-                JsonArray arr = new JsonArray(list.stream().map(MerchantStats.YearMethod::toJson).toList());
-                redisService.setJson(cacheKey, arr, Duration.ofMinutes(10));
+        .compose(jsonStr -> {
+          if (jsonStr != null && !jsonStr.isEmpty()) {
+            try {
+              span.setAttribute("merchant_stats.cache_hit", true);
+              var list = mapper.readValue(jsonStr, new TypeReference<List<MerchantStats.YearMethod>>() {
               });
+              return Future.succeededFuture(list);
+            } catch (Exception e) {
+              /* fallback */ }
+          }
+          span.setAttribute("merchant_stats.cache_hit", false);
+          return repository.getYearlyPaymentMethodByMerchants(req)
+              .compose(res -> redisService.setJson(cacheKey, res, CACHE_TTL).map(v -> res));
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "getYearlyMethodAmounts", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "getYearlyMethodAmounts", e.getMessage()));

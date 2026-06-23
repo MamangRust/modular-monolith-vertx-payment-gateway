@@ -89,7 +89,7 @@ build_all_images() {
     print_status "Building all service images..."
     
     # List of services to build
-    services=("auth" "user" "card" "merchant" "role" "saldo" "transaction" "topup" "transfer" "withdraw" "apigateway" "email")
+    services=("db-migration" "auth" "user" "card" "merchant" "role" "saldo" "transaction" "topup" "transfer" "withdraw" "apigateway" "email")
     
     local failed_builds=0
     
@@ -111,7 +111,7 @@ build_all_images() {
 show_built_images() {
     print_status "Built Docker images:"
     echo ""
-    docker images | grep -E "(auth|user|card|merchant|role|saldo|transaction|topup|transfer|withdraw|apigateway|email)" | head -20
+    docker images | grep -E "(db-migration|auth|user|card|merchant|role|saldo|transaction|topup|transfer|withdraw|apigateway|email)" | head -20
     echo ""
 }
 

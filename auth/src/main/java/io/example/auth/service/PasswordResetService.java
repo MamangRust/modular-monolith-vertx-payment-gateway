@@ -8,15 +8,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.example.auth.model.AuthUser;
-import io.example.auth.model.ResetPasswordRequest;
+import io.example.auth.domain.requests.ResetPasswordRequest;
 import io.example.auth.repository.ResetTokenRepository;
 import io.example.auth.repository.UserRepository;
+import io.example.common.exception.grpc.BadRequestException;
+import io.example.common.exception.grpc.NotFoundException;
 import io.example.common.observability.TracingMetrics;
-import io.example.common.service.RedisService;
 import io.example.common.service.KafkaService;
+import io.example.common.service.RedisService;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class PasswordResetService {
     private static final Logger logger = LoggerFactory.getLogger(PasswordResetService.class);
 
@@ -26,27 +30,13 @@ public class PasswordResetService {
     private final TracingMetrics tracingMetrics;
     private final KafkaService kafkaService;
 
-    public PasswordResetService(UserRepository userRepository,
-            ResetTokenRepository resetTokenRepository,
-            RedisService redisService,
-            TracingMetrics tracingMetrics,
-            KafkaService kafkaService) {
-        this.userRepository = userRepository;
-        this.resetTokenRepository = resetTokenRepository;
-        this.redisService = redisService;
-        this.tracingMetrics = tracingMetrics;
-        this.kafkaService = kafkaService;
-    }
-
     public Future<Boolean> forgotPassword(String email) {
-        String method = "ForgotPassword";
-        TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(method);
+        var ctx = tracingMetrics.startSpan("PasswordResetService.forgotPassword");
 
         return userRepository.findByEmail(email)
                 .compose(user -> {
-                    if (user == null) {
-                        return Future.failedFuture("User not found");
-                    }
+                    if (user == null)
+                        return Future.failedFuture(new NotFoundException("User not found"));
 
                     String token = UUID.randomUUID().toString().substring(0, 10);
                     LocalDateTime expiry = LocalDateTime.now().plusHours(24);
@@ -61,30 +51,26 @@ public class PasswordResetService {
                                             }))
                                     .map(v -> true));
                 })
-                .onSuccess(
-                        v -> tracingMetrics.completeSpanSuccess(tracingContext, method, "Forgot password email process completed"))
-                .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, method, err.getMessage()));
+                .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "forgotPassword", "Process completed"))
+                .onFailure(err -> tracingMetrics.completeSpanError(ctx, "forgotPassword", err.getMessage()));
     }
 
     public Future<Boolean> resetPassword(ResetPasswordRequest request) {
-        String method = "ResetPassword";
-        TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(method);
+        var ctx = tracingMetrics.startSpan("PasswordResetService.resetPassword");
 
         if (request.getPassword() == null || !request.getPassword().equals(request.getConfirmPassword())) {
-            return Future.failedFuture("Passwords do not match");
+            return Future.failedFuture(new BadRequestException("Passwords do not match"));
         }
 
         return redisService.get("resetToken:" + request.getResetToken())
                 .compose(cachedUserId -> {
-                    if (cachedUserId != null) {
+                    if (cachedUserId != null)
                         return Future.succeededFuture(Integer.parseInt(cachedUserId));
-                    }
-
                     return resetTokenRepository.findByToken(request.getResetToken())
                             .compose(rt -> {
-                                if (rt == null) {
-                                    return Future.failedFuture("Invalid or expired reset token");
-                                }
+                                if (rt == null)
+                                    return Future
+                                            .failedFuture(new BadRequestException("Invalid or expired reset token"));
                                 return Future.succeededFuture(rt.getUserId());
                             });
                 })
@@ -94,20 +80,17 @@ public class PasswordResetService {
                             redisService.delete("resetToken:" + request.getResetToken());
                             return Future.succeededFuture(true);
                         }))
-                .onSuccess(
-                        v -> tracingMetrics.completeSpanSuccess(tracingContext, method, "Password reset successfully"))
-                .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, method, err.getMessage()));
+                .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "resetPassword", "Password reset successfully"))
+                .onFailure(err -> tracingMetrics.completeSpanError(ctx, "resetPassword", err.getMessage()));
     }
 
     public Future<Boolean> verifyCode(String code) {
-        String method = "VerifyCode";
-        TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(method);
+        var ctx = tracingMetrics.startSpan("PasswordResetService.verifyCode");
 
         return userRepository.findByVerificationCode(code)
                 .compose(user -> {
-                    if (user == null) {
-                        return Future.failedFuture("Invalid verification code");
-                    }
+                    if (user == null)
+                        return Future.failedFuture(new BadRequestException("Invalid verification code"));
 
                     return userRepository.updateUserIsVerified(user.getUserId(), true)
                             .compose(u -> redisService.delete("verification:" + user.getEmail())
@@ -118,16 +101,13 @@ public class PasswordResetService {
                                             }))
                                     .map(v -> true));
                 })
-                .onSuccess(
-                        v -> tracingMetrics.completeSpanSuccess(tracingContext, method, "Code verified successfully"))
-                .onFailure(err -> tracingMetrics.completeSpanError(tracingContext, method, err.getMessage()));
+                .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "verifyCode", "Code verified successfully"))
+                .onFailure(err -> tracingMetrics.completeSpanError(ctx, "verifyCode", err.getMessage()));
     }
 
     private Future<Void> sendForgotPasswordEmail(AuthUser user, String token) {
-        if (kafkaService == null) {
-            logger.warn("Kafka service not initialized, skipping forgot password email for {}", user.getEmail());
+        if (kafkaService == null)
             return Future.succeededFuture();
-        }
 
         JsonObject emailPayload = new JsonObject()
                 .put("email", user.getEmail())
@@ -139,10 +119,8 @@ public class PasswordResetService {
     }
 
     private Future<Void> sendVerificationSuccessEmail(AuthUser user) {
-        if (kafkaService == null) {
-            logger.warn("Kafka service not initialized, skipping verification success email for {}", user.getEmail());
+        if (kafkaService == null)
             return Future.succeededFuture();
-        }
 
         JsonObject emailPayload = new JsonObject()
                 .put("email", user.getEmail())

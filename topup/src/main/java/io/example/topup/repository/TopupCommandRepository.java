@@ -9,12 +9,20 @@ import io.example.topup.domain.requests.topup.UpdateTopupStatus;
 
 public interface TopupCommandRepository {
   Future<Topup> createTopup(CreateTopupRequest req);
+
   Future<Topup> updateTopup(UpdateTopupRequest req);
+
   Future<Topup> updateTopupAmount(UpdateTopupAmount req);
+
   Future<Topup> updateTopupStatus(UpdateTopupStatus req);
-  Future<Topup> trashTopup(int id);
-  Future<Topup> restoreTopup(int id);
-  Future<Void> deleteTopupPermanently(int id);
-  Future<Void> restoreAllTopups();
-  Future<Void> deleteAllPermanentTopups();
+
+  Future<Topup> trashTopup(Integer id);
+
+  Future<Topup> restoreTopup(Integer id);
+
+  Future<Boolean> deleteTopupPermanently(Integer id);
+
+  Future<Integer> restoreAllTopups();
+
+  Future<Integer> deleteAllPermanentTopups();
 }

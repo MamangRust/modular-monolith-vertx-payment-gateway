@@ -1,54 +1,79 @@
 package io.example.topup.handler;
 
+import io.example.common.grpc.GrpcExceptionMapper;
+import io.example.topup.domain.requests.topup.YearTopupCardNumberRequest;
+import io.example.topup.domain.requests.topup.YearTopupRequest;
+import io.example.topup.model.TopupStats;
 import io.example.topup.service.TopupStatsMethodService;
 import io.vertx.core.Future;
-import pb.topup.Topup.*;
-import pb.topup.stats.TopupStatsMethod.*;
+import lombok.RequiredArgsConstructor;
+import pb.topup.Topup.FindYearTopupCardNumber;
+import pb.topup.Topup.FindYearTopupStatus;
+import pb.topup.stats.TopupStatsMethod.ApiResponseTopupMonthMethod;
+import pb.topup.stats.TopupStatsMethod.ApiResponseTopupYearMethod;
 
-public class TopupStatsMethodHandler implements pb.topup.stats.VertxTopupStatsMethodServiceGrpcServer.TopupStatsMethodServiceApi {
+@RequiredArgsConstructor
+public class TopupStatsMethodHandler
+    implements pb.topup.stats.VertxTopupStatsMethodServiceGrpcServer.TopupStatsMethodServiceApi {
   private final TopupStatsMethodService service;
-
-  public TopupStatsMethodHandler(TopupStatsMethodService service) {
-    this.service = service;
-  }
 
   @Override
   public Future<ApiResponseTopupMonthMethod> findMonthlyTopupMethods(FindYearTopupStatus req) {
-    return service.getMonthlyTopupMethods(req)
+    var domainReq = YearTopupRequest.builder().year(req.getYear()).build();
+    return service.getMonthlyTopupMethods(domainReq)
         .map(res -> ApiResponseTopupMonthMethod.newBuilder()
             .setStatus("success")
-            .setMessage("Monthly topup methods segmented")
+            .setMessage("OK")
             .addAllData(res.stream().map(ProtoConverter::toMonthMethod).toList())
-            .build());
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseTopupYearMethod> findYearlyTopupMethods(FindYearTopupStatus req) {
-    return service.getYearlyTopupMethods(req)
-        .map(res -> ApiResponseTopupYearMethod.newBuilder()
-            .setStatus("success")
-            .setMessage("Yearly topup methods segmented")
-            .addAllData(res.stream().map(ProtoConverter::toYearlyMethod).toList())
-            .build());
+    var domainReq = YearTopupRequest.builder().year(req.getYear()).build();
+
+    return service.getYearlyTopupMethods(domainReq)
+        .map(res -> {
+          ApiResponseTopupYearMethod.Builder builder = ApiResponseTopupYearMethod.newBuilder()
+              .setStatus("success")
+              .setMessage("OK");
+
+          for (TopupStats.YearMethod month : res) {
+            builder.addData(ProtoConverter.toYearlyMethod(month));
+          }
+          return builder.build();
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseTopupMonthMethod> findMonthlyTopupMethodsByCardNumber(FindYearTopupCardNumber req) {
-    return service.getMonthlyTopupMethodsByCard(req)
+    var domainReq = YearTopupCardNumberRequest.builder().cardNumber(req.getCardNumber()).year(req.getYear()).build();
+    return service.getMonthlyTopupMethodsByCard(domainReq)
         .map(res -> ApiResponseTopupMonthMethod.newBuilder()
             .setStatus("success")
-            .setMessage("Monthly card topup methods segmented")
+            .setMessage("OK")
             .addAllData(res.stream().map(ProtoConverter::toMonthMethod).toList())
-            .build());
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseTopupYearMethod> findYearlyTopupMethodsByCardNumber(FindYearTopupCardNumber req) {
-    return service.getYearlyTopupMethodsByCard(req)
-        .map(res -> ApiResponseTopupYearMethod.newBuilder()
-            .setStatus("success")
-            .setMessage("Yearly card topup methods segmented")
-            .addAllData(res.stream().map(ProtoConverter::toYearlyMethod).toList())
-            .build());
+    var domainReq = YearTopupCardNumberRequest.builder().cardNumber(req.getCardNumber()).year(req.getYear()).build();
+
+    return service.getYearlyTopupMethodsByCard(domainReq)
+        .map(res -> {
+          ApiResponseTopupYearMethod.Builder builder = ApiResponseTopupYearMethod.newBuilder()
+              .setStatus("success")
+              .setMessage("OK");
+
+          for (TopupStats.YearMethod month : res) {
+            builder.addData(ProtoConverter.toYearlyMethod(month));
+          }
+          return builder.build();
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 }

@@ -6,17 +6,15 @@ import io.example.merchant.repository.MerchantCommandRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 import pb.merchant.MerchantCommand.CreateMerchantRequest;
 import pb.merchant.MerchantCommand.UpdateMerchantRequest;
 import pb.merchant.MerchantCommand.UpdateMerchantStatusRequest;
 
+@RequiredArgsConstructor
 public class MerchantCommandRepositoryImpl implements MerchantCommandRepository {
   private static final SecureRandom SECURE_RANDOM = new SecureRandom();
   private final Pool pool;
-
-  public MerchantCommandRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   public static String generateApiKey() {
     byte[] key = new byte[32];
@@ -48,7 +46,8 @@ public class MerchantCommandRepositoryImpl implements MerchantCommandRepository 
         WHERE merchant_id = $1 AND deleted_at IS NULL
         RETURNING merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(request.getMerchantId(), request.getName(), request.getUserId(), request.getStatus()))
+    return pool.preparedQuery(sql)
+        .execute(Tuple.of(request.getMerchantId(), request.getName(), request.getUserId(), request.getStatus()))
         .map(rows -> rows.iterator().hasNext() ? Merchant.fromRow(rows.iterator().next()) : null);
   }
 
@@ -65,7 +64,7 @@ public class MerchantCommandRepositoryImpl implements MerchantCommandRepository 
   }
 
   @Override
-  public Future<Merchant> trashedMerchant(int merchantId) {
+  public Future<Merchant> trashedMerchant(Integer merchantId) {
     String sql = """
         UPDATE merchants SET deleted_at = CURRENT_TIMESTAMP WHERE merchant_id = $1 AND deleted_at IS NULL
         RETURNING merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at
@@ -75,7 +74,7 @@ public class MerchantCommandRepositoryImpl implements MerchantCommandRepository 
   }
 
   @Override
-  public Future<Merchant> restoreMerchant(int merchantId) {
+  public Future<Merchant> restoreMerchant(Integer merchantId) {
     String sql = """
         UPDATE merchants SET deleted_at = NULL WHERE merchant_id = $1 AND deleted_at IS NOT NULL
         RETURNING merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at
@@ -85,23 +84,23 @@ public class MerchantCommandRepositoryImpl implements MerchantCommandRepository 
   }
 
   @Override
-  public Future<Boolean> deleteMerchantPermanent(int merchantId) {
+  public Future<Boolean> deleteMerchantPermanent(Integer merchantId) {
     return pool.preparedQuery("DELETE FROM merchants WHERE merchant_id = $1 AND deleted_at IS NOT NULL")
         .execute(Tuple.of(merchantId))
         .map(rows -> rows.rowCount() > 0);
   }
 
   @Override
-  public Future<Boolean> restoreAllMerchants() {
+  public Future<Integer> restoreAllMerchants() {
     return pool.query("UPDATE merchants SET deleted_at = NULL WHERE deleted_at IS NOT NULL")
         .execute()
-        .map(rows -> rows.rowCount() > 0);
+        .map(rows -> rows.rowCount());
   }
 
   @Override
-  public Future<Boolean> deleteAllMerchantsPermanent() {
+  public Future<Integer> deleteAllMerchantsPermanent() {
     return pool.query("DELETE FROM merchants WHERE deleted_at IS NOT NULL")
         .execute()
-        .map(rows -> rows.rowCount() > 0);
+        .map(rows -> rows.rowCount());
   }
 }

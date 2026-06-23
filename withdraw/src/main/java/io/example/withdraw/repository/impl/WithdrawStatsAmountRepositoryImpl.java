@@ -4,6 +4,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+
+import io.example.withdraw.domain.requests.YearMonthCardNumber;
 import io.example.withdraw.model.WithdrawStats;
 import io.example.withdraw.repository.WithdrawStatsAmountRepository;
 import io.vertx.core.Future;
@@ -36,7 +38,8 @@ public class WithdrawStatsAmountRepositoryImpl implements WithdrawStatsAmountRep
     return pool.preparedQuery(sql).execute(Tuple.of(getYearStart(year)))
         .map(rows -> {
           List<WithdrawStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(WithdrawStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(WithdrawStats.MonthAmount.fromRow(r));
           return list;
         });
   }
@@ -53,13 +56,14 @@ public class WithdrawStatsAmountRepositoryImpl implements WithdrawStatsAmountRep
     return pool.preparedQuery(sql).execute(Tuple.of(endYear))
         .map(rows -> {
           List<WithdrawStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(WithdrawStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(WithdrawStats.YearAmount.fromRow(r));
           return list;
         });
   }
 
   @Override
-  public Future<List<WithdrawStats.MonthAmount>> getMonthlyWithdrawAmountsByCard(String card, int year) {
+  public Future<List<WithdrawStats.MonthAmount>> getMonthlyWithdrawAmountsByCard(YearMonthCardNumber req) {
     String sql = """
         WITH months AS (
             SELECT generate_series(date_trunc('year', $2::timestamp), date_trunc('year', $2::timestamp) + interval '11 months', interval '1 month') AS month
@@ -71,16 +75,17 @@ public class WithdrawStatsAmountRepositoryImpl implements WithdrawStatsAmountRep
             AND w.card_number = $1 AND w.deleted_at IS NULL
         GROUP BY m.month ORDER BY m.month
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(card, getYearStart(year)))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getCardNumber(), getYearStart(req.getYear())))
         .map(rows -> {
           List<WithdrawStats.MonthAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(WithdrawStats.MonthAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(WithdrawStats.MonthAmount.fromRow(r));
           return list;
         });
   }
 
   @Override
-  public Future<List<WithdrawStats.YearAmount>> getYearlyWithdrawAmountsByCard(String card, int year) {
+  public Future<List<WithdrawStats.YearAmount>> getYearlyWithdrawAmountsByCard(YearMonthCardNumber req) {
     String sql = """
         SELECT EXTRACT(YEAR FROM w.withdraw_time)::integer AS year, COALESCE(SUM(w.withdraw_amount), 0)::bigint AS total_withdraw_amount
         FROM withdraws w WHERE w.deleted_at IS NULL AND w.card_number = $1
@@ -88,10 +93,11 @@ public class WithdrawStatsAmountRepositoryImpl implements WithdrawStatsAmountRep
           AND w.withdraw_time < (CAST($2 + 1 AS text) || '-01-01')::timestamp
         GROUP BY 1 ORDER BY year
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(card, year))
+    return pool.preparedQuery(sql).execute(Tuple.of(req.getCardNumber(), req.getYear()))
         .map(rows -> {
           List<WithdrawStats.YearAmount> list = new ArrayList<>();
-          for (Row r : rows) list.add(WithdrawStats.YearAmount.fromRow(r));
+          for (Row r : rows)
+            list.add(WithdrawStats.YearAmount.fromRow(r));
           return list;
         });
   }

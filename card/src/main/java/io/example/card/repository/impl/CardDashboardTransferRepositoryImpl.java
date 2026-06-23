@@ -4,13 +4,11 @@ import io.example.card.repository.CardDashboardTransferRepository;
 import io.vertx.core.Future;
 import io.vertx.sqlclient.Pool;
 import io.vertx.sqlclient.Tuple;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class CardDashboardTransferRepositoryImpl implements CardDashboardTransferRepository {
   private final Pool pool;
-
-  public CardDashboardTransferRepositoryImpl(Pool pool) {
-    this.pool = pool;
-  }
 
   @Override
   public Future<Long> getTotalTransferAmount() {

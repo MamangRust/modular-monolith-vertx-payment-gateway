@@ -1,76 +1,83 @@
 package io.example.merchant.handler;
 
+import io.example.common.grpc.GrpcExceptionMapper;
 import io.example.merchant.service.MerchantDocumentQueryService;
 import io.vertx.core.Future;
-import pb.merchant_document.MerchantDocumentOuterClass.*;
-import pb.merchant_document.MerchantDocumentQuery.*;
+import lombok.RequiredArgsConstructor;
+import pb.merchant_document.MerchantDocumentOuterClass.ApiResponseMerchantDocument;
+import pb.merchant_document.MerchantDocumentOuterClass.FindAllMerchantDocumentsRequest;
+import pb.merchant_document.MerchantDocumentOuterClass.FindMerchantDocumentByIdRequest;
+import pb.merchant_document.MerchantDocumentQuery.ApiResponsePaginationMerchantDocument;
+import pb.merchant_document.MerchantDocumentQuery.ApiResponsePaginationMerchantDocumentAt;
 
+@RequiredArgsConstructor
 public class MerchantDocumentQueryHandler implements
     pb.merchant_document.VertxMerchantDocumentQueryServiceGrpcServer.MerchantDocumentQueryServiceApi {
 
   private final MerchantDocumentQueryService service;
 
-  public MerchantDocumentQueryHandler(MerchantDocumentQueryService service) {
-    this.service = service;
-  }
-
-  private pb.common.PaginationMeta toMeta(int page, int limit, int total) {
-    int totalPages = (limit > 0) ? (int) Math.ceil((double) total / limit) : 0;
+  private pb.common.PaginationMeta buildPaginationMeta(int page, int pageSize, int totalRecords) {
+    int safePage = page > 0 ? page : 1;
+    int safePageSize = pageSize > 0 ? pageSize : 10;
+    int totalPages = (int) Math.ceil((double) totalRecords / safePageSize);
     return pb.common.PaginationMeta.newBuilder()
-        .setCurrentPage(page)
-        .setPageSize(limit)
+        .setCurrentPage(safePage)
+        .setPageSize(safePageSize)
         .setTotalPages(totalPages)
-        .setTotalRecords(total)
+        .setTotalRecords(totalRecords)
         .build();
   }
 
   @Override
   public Future<ApiResponsePaginationMerchantDocument> findAll(FindAllMerchantDocumentsRequest req) {
     return service.findAll(req)
-        .map(res -> ApiResponsePaginationMerchantDocument.newBuilder()
-            .setStatus(res.status())
-            .setMessage(res.message())
-            .addAllData(res.data().stream().map(ProtoConverter::fromDocumentResponse).toList())
-            .setPaginationMeta(
-                toMeta(res.pagination().currentPage(), res.pagination().pageSize(), res.pagination().totalRecords()))
-            .build());
+        .map(resp -> {
+          var builder = ApiResponsePaginationMerchantDocument.newBuilder()
+              .setStatus("success")
+              .setMessage("OK")
+              .setPaginationMeta(buildPaginationMeta(req.getPage(), req.getPageSize(), resp.getTotalRecords()));
+          resp.getData().stream().map(ProtoConverter::fromDocumentResponse).forEach(builder::addData);
+          return builder.build();
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponsePaginationMerchantDocumentAt> findAllActive(FindAllMerchantDocumentsRequest req) {
     return service.findByActive(req)
-        .map(res -> ApiResponsePaginationMerchantDocumentAt.newBuilder()
-            .setStatus(res.status())
-            .setMessage(res.message())
-            .addAllData(res.data().stream().map(ProtoConverter::fromDocumentResponseAt).toList())
-            .setPaginationMeta(
-                toMeta(res.pagination().currentPage(), res.pagination().pageSize(), res.pagination().totalRecords()))
-            .build());
+        .map(resp -> {
+          var builder = ApiResponsePaginationMerchantDocumentAt.newBuilder()
+              .setStatus("success")
+              .setMessage("OK")
+              .setPaginationMeta(buildPaginationMeta(req.getPage(), req.getPageSize(), resp.getTotalRecords()));
+          resp.getData().stream().map(ProtoConverter::fromDocumentResponseAt).forEach(builder::addData);
+          return builder.build();
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponsePaginationMerchantDocumentAt> findAllTrashed(FindAllMerchantDocumentsRequest req) {
     return service.findByTrashed(req)
-        .map(res -> ApiResponsePaginationMerchantDocumentAt.newBuilder()
-            .setStatus(res.status())
-            .setMessage(res.message())
-            .addAllData(res.data().stream().map(ProtoConverter::fromDocumentResponseAt).toList())
-            .setPaginationMeta(
-                toMeta(res.pagination().currentPage(), res.pagination().pageSize(), res.pagination().totalRecords()))
-            .build());
+        .map(resp -> {
+          var builder = ApiResponsePaginationMerchantDocumentAt.newBuilder()
+              .setStatus("success")
+              .setMessage("OK")
+              .setPaginationMeta(buildPaginationMeta(req.getPage(), req.getPageSize(), resp.getTotalRecords()));
+          resp.getData().stream().map(ProtoConverter::fromDocumentResponseAt).forEach(builder::addData);
+          return builder.build();
+        })
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 
   @Override
   public Future<ApiResponseMerchantDocument> findById(FindMerchantDocumentByIdRequest req) {
     return service.findById((int) req.getDocumentId())
-        .map(resp -> {
-          var builder = ApiResponseMerchantDocument.newBuilder()
-              .setStatus(resp.status())
-              .setMessage(resp.message());
-          if (resp.data() != null) {
-            builder.setData(ProtoConverter.fromDocumentResponse(resp.data()));
-          }
-          return builder.build();
-        });
+        .map(data -> ApiResponseMerchantDocument.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.fromDocumentResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
   }
 }

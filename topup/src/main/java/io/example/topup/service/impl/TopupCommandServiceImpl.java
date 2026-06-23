@@ -1,16 +1,17 @@
 package io.example.topup.service.impl;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.example.common.exception.NotFoundException;
-import io.example.common.model.ApiResponse;
+import io.example.common.exception.grpc.BadRequestException;
+import io.example.common.exception.grpc.NotFoundException;
 import io.example.common.observability.TracingMetrics;
-import io.example.common.service.RedisService;
 import io.example.common.service.KafkaService;
+import io.example.common.service.RedisService;
 import io.example.common.utils.EmailTemplate;
 import io.example.topup.domain.requests.topup.CreateTopupRequest;
 import io.example.topup.domain.requests.topup.UpdateTopupAmount;
@@ -28,11 +29,14 @@ import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
+import lombok.RequiredArgsConstructor;
 import pb.card.Card.CardWithEmailResponse;
 import pb.card.CardCommand.UpdateCardRequest;
 
+@RequiredArgsConstructor
 public class TopupCommandServiceImpl implements TopupCommandService {
   private static final Logger logger = LoggerFactory.getLogger(TopupCommandServiceImpl.class);
+  private static final String CACHE_PREFIX = "topup:";
 
   private final TopupCommandRepository repo;
   private final TopupQueryRepository repoQuery;
@@ -42,27 +46,60 @@ public class TopupCommandServiceImpl implements TopupCommandService {
   private final TracingMetrics tracingMetrics;
   private final KafkaService kafkaService;
 
-  private static final String CACHE_PREFIX = "topup:";
-
-  public TopupCommandServiceImpl(
-      TopupCommandRepository repo,
-      TopupQueryRepository repoQuery,
-      CardClientRepository repoCard,
-      SaldoClientRepository repoSaldo,
-      RedisService redisService,
-      TracingMetrics tracingMetrics,
-      KafkaService kafkaService) {
-    this.repo = repo;
-    this.repoQuery = repoQuery;
-    this.repoCard = repoCard;
-    this.repoSaldo = repoSaldo;
-    this.redisService = redisService;
-    this.tracingMetrics = tracingMetrics;
-    this.kafkaService = kafkaService;
+  private Future<Void> invalidateCache(Integer topupId) {
+    return redisService.delete(CACHE_PREFIX + topupId)
+        .compose(v -> redisService.delete(CACHE_PREFIX + "list:*"))
+        .<Void>mapEmpty();
   }
 
+  private Future<Void> invalidateListCache() {
+    return redisService.delete(CACHE_PREFIX + "list:*").<Void>mapEmpty();
+  }
+
+  private Future<Void> sendTopupEmail(String email, int amount, Integer topupId) {
+    if (kafkaService == null || email == null || email.isEmpty()) {
+      return Future.succeededFuture();
+    }
+
+    String htmlBody = EmailTemplate.generateHtml(Map.of(
+        "Title", "Topup Successful",
+        "Message", String.format("Your topup of %d has been processed successfully.", amount),
+        "Button", "View History",
+        "Link", "https://sanedge.example.com/topup/history"));
+
+    JsonObject emailPayload = new JsonObject()
+        .put("email", email)
+        .put("subject", "Topup Successful - SanEdge")
+        .put("body", htmlBody);
+
+    return kafkaService.sendMessage("email-service-topic-topup-create", String.valueOf(topupId), emailPayload)
+        .<Void>mapEmpty()
+        .onFailure(err -> logger.error("Failed to send topup email via Kafka for topupId: {}", topupId, err))
+        .recover(err -> Future.succeededFuture());
+  }
+
+  private Future<CardTopupContext> markTopupFailed(CardTopupContext ctx, Throwable err) {
+    UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
+        .topupId(ctx.topup.getId())
+        .status("failed")
+        .build();
+    return repo.updateTopupStatus(statusReq)
+        .compose(v -> Future.<CardTopupContext>failedFuture(err));
+  }
+
+  private Future<UpdateTopupContext> markTopupFailed(UpdateTopupContext ctx, Integer topupId, Throwable err) {
+    UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
+        .topupId(topupId)
+        .status("failed")
+        .build();
+    return repo.updateTopupStatus(statusReq)
+        .compose(v -> Future.<UpdateTopupContext>failedFuture(err));
+  }
+
+  // ── Core Methods ────────────────────────────────────────────────
+
   @Override
-  public Future<ApiResponse<TopupResponse>> createTopup(pb.topup.TopupCommand.CreateTopupRequest req) {
+  public Future<TopupResponse> createTopup(CreateTopupRequest req) {
     TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
         "TopupCommandService.createTopup",
         Attributes.builder()
@@ -71,7 +108,6 @@ public class TopupCommandServiceImpl implements TopupCommandService {
             .build());
 
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
-
     logger.info("Creating topup for card: {} with amount: {}", req.getCardNumber(), req.getTopupAmount());
 
     return repoCard.getCardEmailByCardNumber(req.getCardNumber())
@@ -79,14 +115,7 @@ public class TopupCommandServiceImpl implements TopupCommandService {
           span.addEvent("card_found");
           span.setAttribute("card.id", (long) card.getId());
 
-          CreateTopupRequest domainReq = CreateTopupRequest.builder()
-              .cardNumber(req.getCardNumber())
-              .topupNo(req.getTopupNo())
-              .topupAmount(req.getTopupAmount())
-              .topupMethod(req.getTopupMethod())
-              .build();
-
-          return repo.createTopup(domainReq)
+          return repo.createTopup(req)
               .map((Topup topup) -> {
                 span.addEvent("topup_created");
                 span.setAttribute("topup.id", (long) topup.getId());
@@ -111,17 +140,12 @@ public class TopupCommandServiceImpl implements TopupCommandService {
             .recover(err -> {
               span.recordException(Objects.requireNonNull(err));
               span.addEvent("saldo_update_failed");
-              UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
-                  .topupId(ctx.topup.getId())
-                  .status("failed")
-                  .build();
-              return repo.updateTopupStatus(statusReq)
-                  .compose(v -> Future.failedFuture(err));
+              return markTopupFailed(ctx, err);
             }))
         .compose((CardTopupContext ctx) -> {
           try {
-            CardWithEmailResponse card = ctx.card;
             span.addEvent("card_update_start");
+            CardWithEmailResponse card = ctx.card;
 
             Instant expireInstant = Instant.parse(card.getExpireDate());
             com.google.protobuf.Timestamp expireTs = com.google.protobuf.Timestamp.newBuilder()
@@ -146,22 +170,12 @@ public class TopupCommandServiceImpl implements TopupCommandService {
                 .recover(err -> {
                   span.recordException(Objects.requireNonNull(err));
                   span.addEvent("card_update_failed");
-                  UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
-                      .topupId(ctx.topup.getId())
-                      .status("failed")
-                      .build();
-                  return repo.updateTopupStatus(statusReq)
-                      .compose(v -> Future.failedFuture(err));
+                  return markTopupFailed(ctx, err);
                 });
           } catch (Exception e) {
             span.recordException(e);
             span.addEvent("card_update_exception");
-            UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
-                .topupId(ctx.topup.getId())
-                .status("failed")
-                .build();
-            return repo.updateTopupStatus(statusReq)
-                .compose(v -> Future.failedFuture(e));
+            return markTopupFailed(ctx, e);
           }
         })
         .compose((CardTopupContext ctx) -> {
@@ -170,50 +184,21 @@ public class TopupCommandServiceImpl implements TopupCommandService {
               .topupId(ctx.topup.getId())
               .status("success")
               .build();
-          return repo.updateTopupStatus(statusReq)
-              .map(v -> ctx);
+          return repo.updateTopupStatus(statusReq).map(v -> ctx);
         })
-        .compose((CardTopupContext ctx) -> {
-          // Send Email via Kafka (Async but in chain)
-          if (kafkaService != null && ctx.card.getEmail() != null && !ctx.card.getEmail().isEmpty()) {
-            String htmlBody = EmailTemplate.generateHtml(java.util.Map.of(
-                "Title", "Topup Successful",
-                "Message", String.format("Your topup of %d has been processed successfully.", req.getTopupAmount()),
-                "Button", "View History",
-                "Link", "https://sanedge.example.com/topup/history"));
-
-            JsonObject emailPayload = new JsonObject()
-                .put("email", ctx.card.getEmail())
-                .put("subject", "Topup Successful - SanEdge")
-                .put("body", htmlBody);
-
-            return kafkaService.sendMessage("email-service-topic-topup-create", String.valueOf(ctx.topup.getId()), emailPayload)
-                .map(v -> {
-                  tracingMetrics.completeSpanSuccess(tracingContext, "create", "Topup created successfully");
-                  logger.info("Topup created successfully. topupId={}, card={}", ctx.topup.getId(), req.getCardNumber());
-                  return ApiResponse.success("Topup created successfully", TopupResponse.from(ctx.topup));
-                })
-                .recover(err -> {
-                  logger.error("Failed to send topup email via Kafka for topupId: {}", ctx.topup.getId(), err);
-                  tracingMetrics.completeSpanSuccess(tracingContext, "create", "Topup created successfully (email failed)");
-                  return Future.succeededFuture(ApiResponse.success("Topup created successfully", TopupResponse.from(ctx.topup)));
-                });
-          }
-
-          tracingMetrics.completeSpanSuccess(tracingContext, "create", "Topup created successfully");
-          logger.info("Topup created successfully. topupId={}, card={}", ctx.topup.getId(), req.getCardNumber());
-          return Future.succeededFuture(ApiResponse.success("Topup created successfully", TopupResponse.from(ctx.topup)));
-        })
-        .recover(err -> {
+        .compose((CardTopupContext ctx) -> sendTopupEmail(ctx.card.getEmail(), req.getTopupAmount(), ctx.topup.getId())
+            .map(v -> ctx))
+        .compose((CardTopupContext ctx) -> invalidateListCache().map(v -> ctx))
+        .map(ctx -> TopupResponse.from(ctx.topup))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "create", "Topup created successfully"))
+        .onFailure(err -> {
           logger.error("Failed to create topup for card {}", req.getCardNumber(), err);
-          span.recordException(Objects.requireNonNull(err));
           tracingMetrics.completeSpanError(tracingContext, "create", err.getMessage());
-          return Future.succeededFuture(ApiResponse.error("Failed to create topup: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<TopupResponse>> updateTopup(pb.topup.TopupCommand.UpdateTopupRequest req) {
+  public Future<TopupResponse> updateTopup(UpdateTopupRequest req) {
     TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
         "TopupCommandService.updateTopup",
         Attributes.builder()
@@ -223,7 +208,6 @@ public class TopupCommandServiceImpl implements TopupCommandService {
             .build());
 
     Span span = Span.fromContext(Objects.requireNonNull(tracingContext.getContext()));
-
     logger.info("Updating topup for card: {}, topupId: {}, amount: {}", req.getCardNumber(), req.getTopupId(),
         req.getTopupAmount());
 
@@ -242,26 +226,14 @@ public class TopupCommandServiceImpl implements TopupCommandService {
         .recover(err -> {
           span.recordException(Objects.requireNonNull(err));
           span.addEvent("card_or_topup_not_found");
-          UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
-              .topupId(req.getTopupId())
-              .status("failed")
-              .build();
-          return repo.updateTopupStatus(statusReq)
-              .compose(v -> Future.failedFuture(err));
+          return markTopupFailed(new UpdateTopupContext(null), req.getTopupId(), err);
         })
         .compose((UpdateTopupContext ctx) -> {
           int topupDifference = req.getTopupAmount() - ctx.existingTopup.getTopupAmount().intValue();
           span.addEvent("topup_update_start");
           span.setAttribute("topup.difference", (long) topupDifference);
 
-          UpdateTopupRequest domainReq = UpdateTopupRequest.builder()
-              .topupId(req.getTopupId())
-              .cardNumber(req.getCardNumber())
-              .topupAmount(req.getTopupAmount())
-              .topupMethod(req.getTopupMethod())
-              .build();
-
-          return repo.updateTopup(domainReq)
+          return repo.updateTopup(req)
               .map(v -> {
                 span.addEvent("topup_updated");
                 ctx.topupDifference = topupDifference;
@@ -270,12 +242,7 @@ public class TopupCommandServiceImpl implements TopupCommandService {
               .recover(err -> {
                 span.recordException(Objects.requireNonNull(err));
                 span.addEvent("topup_update_failed");
-                UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
-                    .topupId(req.getTopupId())
-                    .status("failed")
-                    .build();
-                return repo.updateTopupStatus(statusReq)
-                    .compose(v -> Future.failedFuture(err));
+                return markTopupFailed(ctx, req.getTopupId(), err);
               });
         })
         .compose((UpdateTopupContext ctx) -> repoSaldo.getSaldoByCardNumber(req.getCardNumber())
@@ -295,17 +262,14 @@ public class TopupCommandServiceImpl implements TopupCommandService {
                   .recover(err -> {
                     span.recordException(Objects.requireNonNull(err));
                     span.addEvent("saldo_update_failed_rolling_back");
+
                     UpdateTopupAmount amountReq = UpdateTopupAmount.builder()
                         .topupId(req.getTopupId())
                         .topupAmount(ctx.existingTopup.getTopupAmount().intValue())
                         .build();
-                    UpdateTopupStatus statusReq = UpdateTopupStatus.builder()
-                        .topupId(req.getTopupId())
-                        .status("failed")
-                        .build();
+
                     return repo.updateTopupAmount(amountReq)
-                        .compose(v -> repo.updateTopupStatus(statusReq))
-                        .compose(v -> Future.failedFuture(err));
+                        .compose(v -> markTopupFailed(ctx, req.getTopupId(), err));
                   });
             }))
         .compose((UpdateTopupContext ctx) -> {
@@ -317,192 +281,123 @@ public class TopupCommandServiceImpl implements TopupCommandService {
           return repo.updateTopupStatus(statusReq)
               .compose(v -> repoQuery.getTopupById(req.getTopupId()));
         })
-        .compose((Topup topup) -> {
-          span.addEvent("delete_cache");
-          String cacheKey = CACHE_PREFIX + req.getTopupId();
-          return redisService.delete(cacheKey).map(v -> topup).recover(err -> {
-            logger.warn("Failed to delete cache for topupId: {}", req.getTopupId(), err);
-            return Future.succeededFuture(topup);
-          });
-        })
-        .map((Topup topup) -> {
-          tracingMetrics.completeSpanSuccess(tracingContext, "update", "Topup updated successfully");
-          logger.info("Topup updated successfully. topupId={}, card={}", req.getTopupId(), req.getCardNumber());
-          return ApiResponse.success("Topup updated successfully", TopupResponse.from(topup));
-        })
-        .recover(err -> {
+        .compose((Topup topup) -> invalidateCache(req.getTopupId()).map(v -> topup))
+        .map(TopupResponse::from)
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "update", "Topup updated successfully"))
+        .onFailure(err -> {
           logger.error("Failed to update topup for card: {}, topupId: {}", req.getCardNumber(), req.getTopupId(), err);
-          span.recordException(Objects.requireNonNull(err));
           tracingMetrics.completeSpanError(tracingContext, "update", err.getMessage());
-          return Future.succeededFuture(ApiResponse.error("Failed to update topup: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<TopupResponseDeleteAt>> trashTopup(Integer topupId) {
+  public Future<TopupResponseDeleteAt> trashTopup(Integer topupId) {
     TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
         "TopupCommandService.trashTopup",
-        Attributes.builder()
-            .put("topup.id", (long) topupId)
-            .build());
-
-    logger.info("Trashing topup: {}", topupId);
+        Attributes.builder().put("topup.id", (long) topupId).build());
 
     return repo.trashTopup(topupId)
         .compose(topup -> {
           if (topup == null) {
-            return Future.failedFuture(new NotFoundException("Topup not found with id: " + topupId));
+            return Future.<Topup>failedFuture(new NotFoundException("Topup not found with id: " + topupId));
           }
-          String cacheKey = CACHE_PREFIX + topupId;
-          return redisService.delete(cacheKey)
-              .onSuccess(deleted -> {
-                if (deleted > 0) {
-                  logger.debug("Topup {} cache invalidated on trash", topupId);
-                }
-              })
-              .onFailure(
-                  err -> logger.warn("Failed to invalidate cache for trashed topup {}: {}", topupId, err.getMessage()))
-              .map(topup);
+          return invalidateCache(topupId).<Topup>map(v -> topup);
         })
-        .map(topup -> {
-          tracingMetrics.completeSpanSuccess(tracingContext, "trashed", "Topup trashed successfully");
-          return ApiResponse.success("Topup trashed successfully", TopupResponseDeleteAt.from(topup));
-        })
-        .recover(err -> {
+        .map(TopupResponseDeleteAt::from)
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "trashed", "Topup trashed successfully"))
+        .onFailure(err -> {
           logger.error("Failed to trash topup: {}", topupId, err);
           tracingMetrics.completeSpanError(tracingContext, "trashed", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.error("Failed to trash topup: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<TopupResponseDeleteAt>> restoreTopup(Integer topupId) {
+  public Future<TopupResponseDeleteAt> restoreTopup(Integer topupId) {
     TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
         "TopupCommandService.restoreTopup",
-        Attributes.builder()
-            .put("topup.id", (long) topupId)
-            .build());
+        Attributes.builder().put("topup.id", (long) topupId).build());
 
-    logger.info("Restoring topup: {}", topupId);
-
-    return repo.restoreTopup(topupId)
+    return repoQuery.findByTrashed(topupId)
+        .compose(trashed -> {
+          if (trashed == null)
+            return Future.failedFuture(new BadRequestException("Topup not found or must be trashed first"));
+          return repo.restoreTopup(topupId);
+        })
         .compose(topup -> {
           if (topup == null) {
-            return Future.failedFuture(new NotFoundException("Topup not found with id: " + topupId));
+            return Future.<Topup>failedFuture(new NotFoundException("Topup not found with id: " + topupId));
           }
-          String cacheKey = CACHE_PREFIX + topupId;
-          return redisService.delete(cacheKey)
-              .onSuccess(deleted -> {
-                if (deleted > 0) {
-                  logger.debug("Topup {} cache invalidated on restore", topupId);
-                }
-              })
-              .onFailure(
-                  err -> logger.warn("Failed to invalidate cache for restored topup {}: {}", topupId, err.getMessage()))
-              .map(topup);
+          return invalidateCache(topupId).<Topup>map(v -> topup);
         })
-        .map(topup -> {
-          tracingMetrics.completeSpanSuccess(tracingContext, "restore", "Topup restored successfully");
-          return ApiResponse.success(
-              "Topup restored successfully",
-              TopupResponseDeleteAt.from(topup));
-        })
-        .recover(err -> {
+        .map(TopupResponseDeleteAt::from)
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "restore", "Topup restored successfully"))
+        .onFailure(err -> {
           logger.error("Failed to restore topup: {}", topupId, err);
           tracingMetrics.completeSpanError(tracingContext, "restore", err.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.error("Failed to restore topup: " + err.getMessage()));
         });
   }
 
   @Override
-  public Future<ApiResponse<Void>> deleteTopupPermanently(Integer topupId) {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
-        "TopupCommandService.deleteTopupPermanently",
-        Attributes.builder()
-            .put("topup.id", (long) topupId)
-            .build());
+  public Future<Void> deleteTopupPermanently(Integer topupId) {
+    TracingMetrics.TracingContext ctx = tracingMetrics.startSpan("TopupService.deletePermanent",
+        Attributes.builder().put("topup.id", (long) topupId).build());
 
-    logger.info("Permanently deleting topup: {}", topupId);
-
-    return repo.deleteTopupPermanently(topupId)
-        .compose(v -> {
-          String cacheKey = CACHE_PREFIX + topupId;
-          return redisService.delete(cacheKey)
-              .onSuccess(deleted -> {
-                if (deleted > 0) {
-                  logger.debug("Topup {} cache invalidated on permanent delete", topupId);
+    return repoQuery.findByTrashed(topupId)
+        .compose(trashed -> {
+          if (trashed == null) {
+            return Future.<Void>failedFuture(
+                new BadRequestException("Topup not found or must be trashed first"));
+          }
+          return repo.deleteTopupPermanently(topupId)
+              .compose(deleted -> {
+                if (!deleted) {
+                  return Future.<Void>failedFuture(
+                      new BadRequestException("Topup not found or must be trashed first"));
                 }
-              })
-              .onFailure(
-                  err -> logger.warn("Failed to invalidate cache for deleted topup {}: {}", topupId, err.getMessage()))
-              .map(v);
+                return invalidateCache(topupId);
+              });
         })
-        .map(v -> {
-          logger.info("Topup deleted successfully: {}", topupId);
-          tracingMetrics.completeSpanSuccess(tracingContext, "deletePermanent", "Topup deleted permanently");
-          return ApiResponse.<Void>success("success", null);
-        })
-        .recover(throwable -> {
-          logger.error("Failed to deletePermanent topup: {}", topupId, throwable);
-          tracingMetrics.completeSpanError(tracingContext, "deletePermanent", throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.error("Failed to delete topup: " + throwable.getMessage()));
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx,
+            "deletePermanent", "Topup deleted permanently"))
+        .onFailure(err -> {
+          logger.error("Failed to deletePermanent topup: {}", topupId, err);
+          tracingMetrics.completeSpanError(ctx, "deletePermanent", err.getMessage());
         });
   }
 
   @Override
-  public Future<ApiResponse<Void>> restoreAllTopups() {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TopupCommandService.restoreAll");
-
-    logger.info("Attempting to restore all trashed topups");
+  public Future<Void> restoreAllTopups() {
+    TracingMetrics.TracingContext ctx = tracingMetrics.startSpan("TopupService.restoreAll");
 
     return repo.restoreAllTopups()
-        .compose(v -> {
-          logger.info("All topups restored successfully");
-          tracingMetrics.completeSpanSuccess(
-              tracingContext,
-              "restore_all",
-              "All topups restored");
-          return Future.succeededFuture(
-              ApiResponse.<Void>success("All topups restored successfully"));
+        .compose(count -> {
+          if (count == 0) {
+            return Future.<Void>failedFuture(new NotFoundException("No trashed topups found"));
+          }
+          return invalidateListCache();
         })
-        .recover(throwable -> {
-          logger.error("Failed to restore all topups", throwable);
-          tracingMetrics.completeSpanError(
-              tracingContext,
-              "restore_all",
-              throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.error("Failed to restore all topups: " + throwable.getMessage()));
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "restore_all", "All topups restored"))
+        .onFailure(err -> {
+          logger.error("Failed to restore all topups", err);
+          tracingMetrics.completeSpanError(ctx, "restore_all", err.getMessage());
         });
   }
 
   @Override
-  public Future<ApiResponse<Void>> deleteAllPermanentTopups() {
-    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan("TopupCommandService.deleteAllPermanent");
-
-    logger.info("Attempting to permanently delete all trashed topups");
+  public Future<Void> deleteAllPermanentTopups() {
+    TracingMetrics.TracingContext ctx = tracingMetrics.startSpan("TopupService.deleteAllPermanent");
 
     return repo.deleteAllPermanentTopups()
-        .compose(v -> {
-          logger.info("All trashed topups permanently deleted");
-          tracingMetrics.completeSpanSuccess(
-              tracingContext,
-              "deleteAllPermanent",
-              "All topups permanently deleted");
-          return Future.succeededFuture(
-              ApiResponse.<Void>success("All topups permanently deleted"));
+        .compose(count -> {
+          if (count == 0) {
+            return Future.<Void>failedFuture(new NotFoundException("No trashed topups found"));
+          }
+          return invalidateListCache();
         })
-        .recover(throwable -> {
-          logger.error("Failed to permanently delete all topups", throwable);
-          tracingMetrics.completeSpanError(
-              tracingContext,
-              "deleteAllPermanent",
-              throwable.getMessage());
-          return Future.succeededFuture(
-              ApiResponse.error("Failed to permanently delete all topups: " + throwable.getMessage()));
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(ctx, "deleteAllPermanent", "All topups permanently deleted"))
+        .onFailure(err -> {
+          logger.error("Failed to permanently delete all topups", err);
+          tracingMetrics.completeSpanError(ctx, "deleteAllPermanent", err.getMessage());
         });
   }
 

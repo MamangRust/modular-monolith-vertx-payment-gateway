@@ -1,23 +1,21 @@
 package io.example.transfer.repository;
 
-import io.example.common.exception.NotFoundException;
+import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
+import lombok.RequiredArgsConstructor;
 import pb.saldo.Saldo.*;
 import pb.saldo.SaldoCommand.*;
 import pb.saldo.VertxSaldoCommandServiceGrpcClient;
 import pb.saldo.VertxSaldoQueryServiceGrpcClient;
 
+@RequiredArgsConstructor
 public class SaldoClientRepository {
   private final VertxSaldoQueryServiceGrpcClient queryStub;
   private final VertxSaldoCommandServiceGrpcClient commandStub;
 
-  public SaldoClientRepository(VertxSaldoQueryServiceGrpcClient queryStub, VertxSaldoCommandServiceGrpcClient commandStub) {
-    this.queryStub = queryStub;
-    this.commandStub = commandStub;
-  }
-
   public Future<ApiResponseSaldo> getSaldoByCardNumber(String cardNumber) {
-    return queryStub.findByCardNumber(pb.card.Card.FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
+    return queryStub
+        .findByCardNumber(pb.card.Card.FindByCardNumberRequest.newBuilder().setCardNumber(cardNumber).build())
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {
             return Future.failedFuture(new NotFoundException(resp.getMessage()));

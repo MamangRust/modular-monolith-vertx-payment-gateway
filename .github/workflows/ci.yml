@@ -72,7 +72,7 @@ jobs:
           bash build-docker-images.sh
 
       - name: Scan Built Image (Auth Service)
-        uses: aquasecurity/trivy-action@0.22.0
+        uses: aquasecurity/trivy-action@v0.22.0
         with:
           image-ref: 'monolith-payment-gateway-grpc-vertx/auth:latest'
           severity: 'HIGH,CRITICAL'

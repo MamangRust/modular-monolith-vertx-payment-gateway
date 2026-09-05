@@ -74,15 +74,12 @@ public class CardEmail {
     if (row == null)
       return null;
 
-    Integer id = row.getInteger("id");
-    if (id == null) {
-      id = row.getInteger("card_id");
-    }
+    Integer id = Card.readId(row);
     String email = row.getString("email");
     Integer userId = row.getInteger("user_id");
     String cardNumber = row.getString("card_number");
     String cardType = row.getString("card_type");
-    String expireDate = row.getString("expire_date");
+    String expireDate = Card.readExpireDate(row);
     String cvv = row.getString("cvv");
     String cardProvider = row.getString("card_provider");
 

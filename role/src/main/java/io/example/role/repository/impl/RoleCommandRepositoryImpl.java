@@ -30,8 +30,8 @@ public class RoleCommandRepositoryImpl implements RoleCommandRepository {
   public Future<Role> updateRole(UpdateRoleRequest request) {
     return client
         .preparedQuery(
-            "UPDATE roles SET role_name = $1, updated_at = CURRENT_TIMESTAMP WHERE role_id = $2 AND deleted_at IS NULL RETURNING role_id, role_name, created_at, updated_at, deleted_at")
-        .execute(Tuple.of(request.getName(), request.getRoleId()))
+            "UPDATE roles SET role_name = COALESCE(NULLIF($1, ''), role_name), updated_at = CURRENT_TIMESTAMP WHERE role_id = $2 AND deleted_at IS NULL RETURNING role_id, role_name, created_at, updated_at, deleted_at")
+        .execute(Tuple.of(request.getName() != null ? request.getName() : "", request.getRoleId()))
         .map(this::mapSingleOrNull);
   }
 

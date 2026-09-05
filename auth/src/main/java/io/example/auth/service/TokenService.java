@@ -12,16 +12,35 @@ public class TokenService {
     }
 
     public String createAccessToken(Integer userId) {
+        return createAccessToken(userId, java.util.List.of());
+    }
+
+    public String createAccessToken(Integer userId, java.util.List<String> roleNames) {
+        JsonObject claims = tokenClaims(userId);
+        if (roleNames != null && !roleNames.isEmpty()) {
+            claims.put("roleNames", new io.vertx.core.json.JsonArray(roleNames));
+        }
         return jwtProvider.generateToken(
-            new JsonObject().put("sub", userId.toString()),
+            claims,
             new JWTOptions().setExpiresInMinutes(15)
         );
     }
 
     public String createRefreshToken(Integer userId) {
         return jwtProvider.generateToken(
-            new JsonObject().put("sub", userId.toString()),
+            tokenClaims(userId),
             new JWTOptions().setExpiresInMinutes(1440) // 24 hours
         );
+    }
+
+    /**
+     * Standard claims shared by both token kinds. {@code sub} keeps the subject for
+     * standard consumers; {@code userId} is the numeric claim the API gateway reads
+     * in JwtMiddleware/role checks and {@code /me}.
+     */
+    private static JsonObject tokenClaims(Integer userId) {
+        return new JsonObject()
+            .put("sub", userId.toString())
+            .put("userId", userId);
     }
 }

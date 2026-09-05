@@ -5,6 +5,7 @@ import io.vertx.core.Future;
 import lombok.RequiredArgsConstructor;
 import pb.saldo.Saldo.ApiResponseSaldo;
 import pb.saldo.SaldoCommand.UpdateSaldoBalanceRequest;
+import pb.saldo.SaldoCommand.UpdateSaldoDeltaRequest;
 import pb.saldo.VertxSaldoCommandServiceGrpcClient;
 import pb.saldo.VertxSaldoQueryServiceGrpcClient;
 
@@ -19,6 +20,19 @@ public class SaldoClientRepository {
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {
             return Future.failedFuture(new NotFoundException(resp.getMessage()));
+          }
+          return Future.succeededFuture(resp);
+        });
+  }
+
+  public Future<ApiResponseSaldo> updateSaldoDelta(String cardNumber, int delta) {
+    return commandStub.updateSaldoDelta(UpdateSaldoDeltaRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .setDelta(delta)
+        .build())
+        .compose(resp -> {
+          if (resp.getStatus().equals("error")) {
+            return Future.failedFuture(new RuntimeException(resp.getMessage()));
           }
           return Future.succeededFuture(resp);
         });

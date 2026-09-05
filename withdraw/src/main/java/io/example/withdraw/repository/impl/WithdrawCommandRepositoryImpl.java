@@ -18,30 +18,79 @@ public class WithdrawCommandRepositoryImpl implements WithdrawCommandRepository 
 
   @Override
   public Future<Withdraw> createWithdraw(CreateWithdrawRequest req) {
+    return createWithdraw(req, 10_000_000L);
+  }
+
+  @Override
+  public Future<Withdraw> createWithdraw(CreateWithdrawRequest req, long dailyLimit) {
     String sql = """
-        INSERT INTO withdraws (card_number, withdraw_amount, withdraw_time, status, created_at, updated_at)
-        VALUES ($1, $2, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        WITH card_lock AS (
+          SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+        ), daily_total AS (
+          SELECT COALESCE(SUM(w.withdraw_amount), 0) AS total_amount
+          FROM withdraws w, card_lock
+          WHERE w.card_number = $1 AND w.status IN ('pending', 'success') AND w.deleted_at IS NULL
+            AND w.withdraw_time >= CURRENT_DATE
+            AND w.withdraw_time < CURRENT_DATE + INTERVAL '1 day'
+        )
+        INSERT INTO withdraws (card_number, withdraw_amount, idempotency_key, withdraw_time, status, created_at, updated_at)
+        SELECT $1, $2, $3, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM daily_total
+        WHERE daily_total.total_amount + $2 <= $4
+        ON CONFLICT (idempotency_key)
+        WHERE idempotency_key IS NOT NULL AND deleted_at IS NULL DO NOTHING
         RETURNING *
         """;
+    String idempotencyKey = req.getIdempotencyKey() != null && !req.getIdempotencyKey().isBlank()
+        ? req.getIdempotencyKey() : null;
     return pool.preparedQuery(sql)
-        .execute(Tuple.of(req.getCardNumber(), req.getWithdrawAmount()))
+        .execute(Tuple.of(req.getCardNumber(), req.getWithdrawAmount(), idempotencyKey, dailyLimit))
+        .map(this::mapSingleOrNull);
+  }
+
+  @Override
+  public Future<Withdraw> findByIdempotencyKey(String idempotencyKey) {
+    String sql = "SELECT * FROM withdraws WHERE idempotency_key = $1 AND deleted_at IS NULL LIMIT 1";
+    return pool.preparedQuery(sql)
+        .execute(Tuple.of(idempotencyKey))
         .map(this::mapSingleOrNull);
   }
 
   @Override
   public Future<Withdraw> updateWithdraw(UpdateWithdrawRequest req) {
+    return updateWithdraw(req, 10_000_000L);
+  }
+
+  @Override
+  public Future<Withdraw> updateWithdraw(UpdateWithdrawRequest req, long dailyLimit) {
     String sql = """
-        UPDATE withdraws SET card_number = $2, withdraw_amount = $3, updated_at = CURRENT_TIMESTAMP
-        WHERE withdraw_id = $1 AND deleted_at IS NULL RETURNING *
+        WITH card_lock AS (
+          SELECT pg_advisory_xact_lock(hashtextextended($2, 0))
+        ), daily_total AS (
+          SELECT COALESCE(SUM(w.withdraw_amount), 0) AS total_amount
+          FROM withdraws w, card_lock
+          WHERE w.card_number = $2 AND w.withdraw_id <> $1
+            AND w.status IN ('pending', 'success') AND w.deleted_at IS NULL
+            AND w.withdraw_time >= CURRENT_DATE
+            AND w.withdraw_time < CURRENT_DATE + INTERVAL '1 day'
+        )
+        UPDATE withdraws
+        SET card_number = COALESCE(NULLIF($2, ''), card_number),
+            withdraw_amount = COALESCE(NULLIF($3, 0), withdraw_amount),
+            updated_at = CURRENT_TIMESTAMP
+        FROM daily_total
+        WHERE withdraw_id = $1 AND deleted_at IS NULL AND daily_total.total_amount + $3 <= $4
+
+        RETURNING withdraws.*
         """;
     return pool.preparedQuery(sql)
-        .execute(Tuple.of(req.getWithdrawId(), req.getCardNumber(), req.getWithdrawAmount()))
+        .execute(Tuple.of(req.getWithdrawId(), req.getCardNumber(), req.getWithdrawAmount(), dailyLimit))
         .map(this::mapSingleOrNull);
   }
 
   @Override
   public Future<Withdraw> updateWithdrawStatus(UpdateWithdrawStatus req) {
-    String sql = "UPDATE withdraws SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE withdraw_id = $1 AND deleted_at IS NULL RETURNING *";
+    String sql = "UPDATE withdraws SET status = COALESCE(NULLIF($2, ''), status), updated_at = CURRENT_TIMESTAMP WHERE withdraw_id = $1 AND deleted_at IS NULL RETURNING *";
     return pool.preparedQuery(sql).execute(Tuple.of(req.getWithdrawId(), req.getStatus())).map(this::mapSingleOrNull);
   }
 

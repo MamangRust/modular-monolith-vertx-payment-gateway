@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - email-deployment.yaml
-- email-service.yaml
 - email-hpa.yaml
+- email-service.yaml
+- pdb.yaml
+- network-policy.yaml

@@ -13,9 +13,12 @@ import io.example.auth.service.LoginService;
 import io.example.auth.service.PasswordResetService;
 import io.example.auth.service.RegisterService;
 import io.example.auth.service.TokenService;
+import io.example.common.chaos.ChaosKafkaInterceptor;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
+import io.example.common.config.JwtConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
 import io.example.common.observability.TracingMetrics;
@@ -41,6 +44,7 @@ public class AuthVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(AuthVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
   private io.example.common.service.KafkaService kafkaService;
 
   public static void main(String[] args) {
@@ -55,8 +59,8 @@ public class AuthVerticle extends AbstractVerticle {
             .put("password", "DRAGON")
             .put("pool_size", 5))
         .put("grpc_port", 8083)
-        .put("service.name", "auth-service")
-        .put("jwt_secret", "my-secret-key");
+        .put("service.name", "auth-service");
+    // jwt_secret intentionally absent: resolved from JWT_SECRET/SECRET_KEY env at startup.
 
     DeploymentOptions options = new DeploymentOptions().setConfig(config);
 
@@ -92,7 +96,10 @@ public class AuthVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -113,9 +120,15 @@ public class AuthVerticle extends AbstractVerticle {
     kafkaConfig.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
     kafkaConfig.put("acks", "1");
     KafkaProducer<String, String> producer = KafkaProducer.create(vertx, kafkaConfig);
-    this.kafkaService = new io.example.common.service.KafkaService(producer);
+    KafkaProducer<String, String> chaosProducer = ChaosKafkaInterceptor.wrap(producer, chaosManager, vertx);
+    this.kafkaService = new io.example.common.service.KafkaService(chaosProducer);
 
-    String jwtSecret = rawConfig.getString("jwt_secret", "my-secret-key");
+    // Signing key comes from JWT_SECRET (fallback SECRET_KEY) via JwtConfig, and must
+    // match what the apigateway uses to verify. No hardcoded fallback: a shared constant
+    // in source lets anyone forge tokens. Config key "jwt_secret" still wins for tests.
+    String jwtSecret = rawConfig.containsKey("jwt_secret")
+        ? rawConfig.getString("jwt_secret")
+        : JwtConfig.resolveSecret();
     JWTAuth jwtProvider = JWTAuth.create(vertx, new JWTAuthOptions()
         .addPubSecKey(new PubSecKeyOptions()
             .setAlgorithm("HS256")
@@ -162,6 +175,7 @@ public class AuthVerticle extends AbstractVerticle {
     startGrpcServer(handler, port)
         .onSuccess(v -> {
           log.info("AuthVerticle fully initialized with CQRS. Listening for gRPC on port {}", port);
+          grpcHealthService.setServing(true);
           startPromise.complete();
         })
         .onFailure(err -> {
@@ -172,6 +186,9 @@ public class AuthVerticle extends AbstractVerticle {
 
   @Override
   public void stop(Promise<Void> stopPromise) {
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
+    }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
     }
@@ -187,6 +204,7 @@ public class AuthVerticle extends AbstractVerticle {
     // Bind the unified API handler onto server
     handler.bindAll(grpcServer);
 
+    grpcHealthService = new GrpcHealthService("auth").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(grpcServer)
         .listen(grpcPort)

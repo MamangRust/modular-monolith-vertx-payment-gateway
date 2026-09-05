@@ -69,7 +69,7 @@ public class MerchantDocumentCommandServiceImpl implements MerchantDocumentComma
                           .put("body", htmlBody);
 
                       return kafkaService
-                          .sendMessage("email-service-topic-merchant-document-created", String.valueOf(doc.getId()),
+                          .sendMessage("email-service-topic-merchant-document-create", String.valueOf(doc.getId()),
                               emailPayload)
                           .map(v -> doc)
                           .recover(err -> Future.succeededFuture(doc));

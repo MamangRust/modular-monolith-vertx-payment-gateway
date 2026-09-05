@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - auth-deployment.yaml
-- auth-service.yaml
 - auth-hpa.yaml
+- auth-service.yaml
+- pdb.yaml
+- network-policy.yaml

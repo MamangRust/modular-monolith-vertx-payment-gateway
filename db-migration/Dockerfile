@@ -19,7 +19,7 @@ COPY user/pom.xml user/
 COPY withdraw/pom.xml withdraw/
 COPY db-migration/pom.xml db-migration/
 COPY common/src common/src
-COPY db-migration/src db-migration/
+COPY db-migration/src db-migration/src
 
 RUN --mount=type=cache,target=/root/.m2 mvn clean package -pl db-migration -am -DskipTests -q -Dmaven.wagon.http.retryHandler.count=5
 

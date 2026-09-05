@@ -21,9 +21,15 @@ public class UserRepositoryImpl implements UserRepository {
 
     @Override
     public Future<AuthUser> findByEmailAndVerify(String email) {
-        return pool.preparedQuery("SELECT * FROM users WHERE email = $1 AND is_verified = true AND deleted_at IS NULL")
+        return pool.preparedQuery("""
+                SELECT u.*, r.role_name
+                FROM users u
+                JOIN user_roles ur ON ur.user_id = u.user_id AND ur.deleted_at IS NULL
+                JOIN roles r ON r.role_id = ur.role_id AND r.deleted_at IS NULL
+                WHERE u.email = $1 AND u.is_verified = true AND u.deleted_at IS NULL
+                """)
                 .execute(Tuple.of(email))
-                .map(rows -> rows.iterator().hasNext() ? AuthUser.fromRow(rows.iterator().next()) : null);
+                .map(AuthUser::fromRowsWithRoles);
     }
 
     @Override

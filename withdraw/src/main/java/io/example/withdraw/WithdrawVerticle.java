@@ -8,6 +8,7 @@ import io.example.common.chaos.ChaosKafkaInterceptor;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.TelemetryConfig;
@@ -60,6 +61,7 @@ public class WithdrawVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(WithdrawVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
 
@@ -74,11 +76,11 @@ public class WithdrawVerticle extends AbstractVerticle {
             .put("user", "DRAGON")
             .put("password", "DRAGON")
             .put("pool_size", 5))
-        .put("grpc_port", 8089)
-        .put("card_service_host", "localhost")
-        .put("card_service_port", 8082)
-        .put("saldo_service_host", "localhost")
-        .put("saldo_service_port", 8084)
+        .put("grpc_port", 50060)
+        .put("card_service_host", "card")
+        .put("card_service_port", 50053)
+        .put("saldo_service_host", "saldo")
+        .put("saldo_service_port", 50056)
         .put("service.name", "withdraw-service");
 
     DeploymentOptions options = new DeploymentOptions().setConfig(config);
@@ -86,7 +88,7 @@ public class WithdrawVerticle extends AbstractVerticle {
     vertx.deployVerticle(new WithdrawVerticle(), options)
         .onSuccess(id -> {
           log.info("✅ Withdraw Service successfully deployed! ID: {}", id);
-          log.info("🚀 gRPC Server running on port 8089");
+          log.info("🚀 gRPC Server running on port 50060");
         })
         .onFailure(err -> {
           log.error("❌ Failed to deploy WithdrawVerticle", err);
@@ -115,7 +117,10 @@ public class WithdrawVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -134,14 +139,22 @@ public class WithdrawVerticle extends AbstractVerticle {
     // 3. Initialize gRPC Clients
     this.grpcClient = GrpcClient.client(vertx);
 
-    String cardHost = rawConfig.getString("card_service_host", "localhost");
-    int cardPort = rawConfig.getInteger("card_service_port", 8082);
+    String cardHost = System.getenv().getOrDefault("CARD_SERVICE_HOST",
+        rawConfig.getString("card_service_host", "card"));
+    int cardPort = Integer.parseInt(
+        System.getenv().getOrDefault("CARD_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_CARD_PORT",
+                String.valueOf(rawConfig.getInteger("card_service_port", 50053)))));
     var cardStub = new VertxCardQueryServiceGrpcClient(grpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(cardPort, cardHost));
     var cardClientRepo = new CardClientRepository(cardStub);
 
-    String saldoHost = rawConfig.getString("saldo_service_host", "localhost");
-    int saldoPort = rawConfig.getInteger("saldo_service_port", 8084);
+    String saldoHost = System.getenv().getOrDefault("SALDO_SERVICE_HOST",
+        rawConfig.getString("saldo_service_host", "saldo"));
+    int saldoPort = Integer.parseInt(
+        System.getenv().getOrDefault("SALDO_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_SALDO_PORT",
+                String.valueOf(rawConfig.getInteger("saldo_service_port", 50056)))));
     var saldoQueryStub = new VertxSaldoQueryServiceGrpcClient(grpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(saldoPort, saldoHost));
     var saldoCmdStub = new VertxSaldoCommandServiceGrpcClient(grpcClient,
@@ -178,6 +191,7 @@ public class WithdrawVerticle extends AbstractVerticle {
           log.info(
               "WithdrawVerticle fully initialized with Decoupled CQRS and gRPC Clients. Listening for gRPC on port {}",
               port);
+          grpcHealthService.setServing(true);
           startPromise.complete();
         })
         .onFailure(err -> {
@@ -190,6 +204,9 @@ public class WithdrawVerticle extends AbstractVerticle {
   public void stop(Promise<Void> stopPromise) {
     if (kafkaService != null) {
       kafkaService.close();
+    }
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
     }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
@@ -218,6 +235,7 @@ public class WithdrawVerticle extends AbstractVerticle {
     Handler<HttpServerRequest> chaosHandler =
         new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
 
+    grpcHealthService = new GrpcHealthService("withdraw").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(chaosHandler)
         .listen(grpcPort)

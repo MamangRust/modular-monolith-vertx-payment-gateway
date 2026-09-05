@@ -7,6 +7,6 @@ public class UnauthorizedException extends GrpcException {
 
     @Override
     public io.grpc.Status.Code getGrpcStatusCode() {
-        return io.grpc.Status.Code.NOT_FOUND;
+        return io.grpc.Status.Code.UNAUTHENTICATED;
     }
 }

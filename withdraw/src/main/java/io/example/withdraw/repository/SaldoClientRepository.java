@@ -25,6 +25,19 @@ public class SaldoClientRepository {
         });
   }
 
+  public Future<ApiResponseSaldo> updateSaldoDelta(String cardNumber, int delta) {
+    return commandStub.updateSaldoDelta(UpdateSaldoDeltaRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .setDelta(delta)
+        .build())
+        .compose(resp -> {
+          if (resp.getStatus().equals("error")) {
+            return Future.failedFuture(new RuntimeException(resp.getMessage()));
+          }
+          return Future.succeededFuture(resp);
+        });
+  }
+
   public Future<ApiResponseSaldo> updateSaldoBalance(UpdateSaldoBalance request) {
     return commandStub.updateSaldoBalance(UpdateSaldoBalanceRequest.newBuilder()
         .setCardNumber(request.getCardNumber())

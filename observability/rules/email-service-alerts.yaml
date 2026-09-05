@@ -1,11 +1,56 @@
 groups:
   - name: email-service-alerts
     rules:
-      - alert: HighEmailFailureRate
-        expr: increase(email_service_requests_total{method="ConsumeClaim",status="failed_send_email"}[5m]) > 5
-        for: 2m
+      - alert: EmailConsumerLagHigh
+        expr: max by (partition) (kafka_consumer_lag{group="email-service-group"}) > 1000
+        for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "High email failure rate on EmailService"
-          description: "More than 5 failed email attempts in the last 5 minutes for method 'ConsumeClaim'."
+          summary: "Consumer lag email-service tinggi"
+          description: "Consumer lag > 1000 pada satu partition selama 10 menit."
+
+      - alert: EmailDlqGrowing
+        expr: increase(email_dlq_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ email-service bertambah"
+          description: "Ada record baru di DLQ email-service dalam 15 menit terakhir."
+
+      - alert: EmailRetryRateHigh
+        expr: rate(email_retried_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Retry rate email-service tinggi"
+          description: "Rata-rata lebih dari 0.5 retry per detik selama 10 menit."
+
+      - alert: EmailSmtpFailureHigh
+        expr: rate(email_failed_total[5m]) > 0.2
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SMTP failure email-service tinggi"
+          description: "Rata-rata lebih dari 0.2 kegagalan SMTP per detik selama 10 menit."
+
+      - alert: EmailRedisUnavailable
+        expr: increase(email_idempotency_claim_failed_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis idempotency claim gagal (fail-open aktif)"
+          description: "Ada kegagalan claim idempotency — fail-open aktif, pantau duplicate window."
+
+      - alert: EmailConsumerLagMissing
+        expr: absent(kafka_consumer_lag{group="email-service-group"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Metric consumer lag email-service hilang"
+          description: "Tidak ada series kafka_consumer_lag — consumer tidak punya assignment atau service mati."

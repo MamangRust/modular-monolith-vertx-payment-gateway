@@ -4,6 +4,8 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.NoSuchElementException;
+import java.util.UUID;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Row;
@@ -22,6 +24,8 @@ public class Topup {
   private String topupNo;
   private Long topupAmount;
   private String topupMethod;
+  private String status;
+  private String idempotencyKey;
   private Timestamp topupTime;
   private Timestamp createdAt;
   private Timestamp updatedAt;
@@ -33,7 +37,8 @@ public class Topup {
         .put("card_number", cardNumber)
         .put("topup_no", topupNo)
         .put("topup_amount", topupAmount)
-        .put("topup_method", topupMethod);
+        .put("topup_method", topupMethod)
+        .put("status", status);
 
     if (topupTime != null) {
       json.put("topup_time", topupTime.toString());
@@ -62,6 +67,8 @@ public class Topup {
         .topupNo(json.getString("topup_no"))
         .topupAmount(json.getLong("topup_amount"))
         .topupMethod(json.getString("topup_method"))
+        .status(json.getString("status"))
+        .idempotencyKey(json.getString("idempotency_key"))
         .topupTime(parseTimestamp(json, "topup_time"))
         .createdAt(parseTimestamp(json, "created_at"))
         .updatedAt(parseTimestamp(json, "updated_at"))
@@ -73,14 +80,18 @@ public class Topup {
     if (row == null)
       return null;
 
-    Integer id = row.getInteger("id");
-    if (id == null) {
-      id = row.getInteger("topup_id");
-    }
+    // PK column in the "topups" table is "topup_id" (see V12 migration).
+    // Read it first; fall back to "id" only when a query aliases topup_id AS id.
+    // Row.getInteger throws NoSuchElementException for a missing column, not null.
+    Integer id = readId(row);
     String cardNumber = row.getString("card_number");
-    String topupNo = row.getString("topup_no");
+    // "topup_no" is UUID in the topups table (V12 migration), so getString would
+    // throw ClassCastException. Read as UUID and fall back to text for aliased/cast queries.
+    String topupNo = readTopupNo(row);
     Long topupAmount = row.getLong("topup_amount");
     String topupMethod = row.getString("topup_method");
+    String status = row.getString("status");
+    String idempotencyKey = row.getString("idempotency_key");
 
     Timestamp topupTime = null;
     LocalDateTime topupTimeLocal = row.get(LocalDateTime.class, "topup_time");
@@ -112,11 +123,41 @@ public class Topup {
         .topupNo(topupNo)
         .topupAmount(topupAmount)
         .topupMethod(topupMethod)
+        .status(status)
+        .idempotencyKey(idempotencyKey)
         .topupTime(topupTime)
         .createdAt(createdAt)
         .updatedAt(updatedAt)
         .deletedAt(deletedAt)
         .build();
+  }
+
+  static String readTopupNo(Row row) {
+    try {
+      UUID uuid = row.getUUID("topup_no");
+      if (uuid != null) {
+        return uuid.toString();
+      }
+    } catch (ClassCastException | IllegalArgumentException ignored) {
+      // column already text/varchar, fall through to getString below
+    }
+    return row.getString("topup_no");
+  }
+
+  static Integer readId(Row row) {
+    try {
+      Integer id = row.getInteger("topup_id");
+      if (id != null) {
+        return id;
+      }
+    } catch (NoSuchElementException ignored) {
+      // query aliased topup_id AS id
+    }
+    try {
+      return row.getInteger("id");
+    } catch (NoSuchElementException ignored) {
+      return null;
+    }
   }
 
   private static Timestamp parseTimestamp(JsonObject json, String field) {

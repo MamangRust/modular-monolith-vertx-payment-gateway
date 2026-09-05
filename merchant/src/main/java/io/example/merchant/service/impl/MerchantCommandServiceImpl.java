@@ -11,6 +11,7 @@ import io.example.common.observability.TracingMetrics;
 import io.example.common.service.KafkaService;
 import io.example.common.service.RedisService;
 import io.example.common.utils.EmailTemplate;
+import io.example.merchant.model.Merchant;
 import io.example.merchant.model.MerchantResponse;
 import io.example.merchant.model.MerchantResponseDeleteAt;
 import io.example.merchant.repository.MerchantCommandRepository;
@@ -63,7 +64,7 @@ public class MerchantCommandServiceImpl implements MerchantCommandService {
                     .put("body", htmlBody);
 
                 return kafkaService
-                    .sendMessage("email-service-topic-merchant-created", String.valueOf(merchant.getId()), emailPayload)
+                    .sendMessage("email-service-topic-merchant-create", String.valueOf(merchant.getId()), emailPayload)
                     .map(v -> merchant)
                     .recover(err -> Future.succeededFuture(merchant));
               });
@@ -80,11 +81,21 @@ public class MerchantCommandServiceImpl implements MerchantCommandService {
         .compose(merchant -> {
           if (merchant == null)
             return Future.failedFuture(new NotFoundException("Merchant not found"));
-          return redisService.delete("merchant:" + merchant.getId()).map(v -> merchant);
+          return invalidateCache(merchant.getId()).recover(err -> Future.succeededFuture()).<Merchant>map(v -> merchant);
         })
         .map(MerchantResponse::from)
         .onSuccess(r -> tracingMetrics.completeSpanSuccess(ctx, "updateMerchant", "Success"))
         .onFailure(e -> tracingMetrics.completeSpanError(ctx, "updateMerchant", e.getMessage()));
+  }
+
+  private Future<Void> invalidateCache(Integer merchantId) {
+    try {
+      return redisService.delete("merchant:" + merchantId)
+          .recover(err -> Future.succeededFuture(0L))
+          .map(v -> (Void) null);
+    } catch (Throwable t) {
+      return Future.succeededFuture();
+    }
   }
 
   @Override

@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - merchant-deployment.yaml
-- merchant-service.yaml
 - merchant-hpa.yaml
+- merchant-service.yaml
+- pdb.yaml
+- network-policy.yaml

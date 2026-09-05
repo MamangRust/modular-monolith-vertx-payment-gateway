@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.example.common.exception.grpc.BadRequestException;
+import io.example.common.exception.grpc.ConflictException;
 import io.example.common.exception.grpc.ForbiddenException;
 import io.example.common.exception.grpc.NotFoundException;
 import io.example.common.observability.TracingMetrics;
@@ -56,6 +57,24 @@ public class TransactionCommandServiceImpl implements TransactionCommandService 
     return redisService.delete(CACHE_PREFIX + "list:*").<Void>mapEmpty();
   }
 
+  private Future<MerchantCardContext> markTransactionFailedAndFail(MerchantCardContext ctx, Throwable err) {
+    if (ctx.transaction == null) {
+      return Future.failedFuture(err);
+    }
+    return repo.updateTransactionStatus(ctx.transaction.getId(), "failed")
+        .recover(statusErr -> {
+          logger.error("Failed to mark transaction {} as failed", ctx.transaction.getId(), statusErr);
+          return Future.succeededFuture(ctx.transaction);
+        })
+        .compose(ignored -> Future.<MerchantCardContext>failedFuture(err));
+  }
+
+  private boolean matchesIdempotentRequest(Transaction existing, CreateTransactionRequest req) {
+    return Objects.equals(existing.getCardNumber(), req.getCardNumber())
+        && Objects.equals(existing.getAmount(), (long) req.getAmount())
+        && Objects.equals(existing.getPaymentMethod(), req.getPaymentMethod());
+  }
+
   private Future<Void> sendTransactionEmail(String email, int amount, Integer transactionId) {
     if (kafkaService == null || email == null || email.isEmpty()) {
       return Future.succeededFuture();
@@ -93,92 +112,142 @@ public class TransactionCommandServiceImpl implements TransactionCommandService 
     logger.info("Creating transaction for card: {}, amount: {}", req.getCardNumber(), req.getAmount());
 
     MerchantCardContext ctx = new MerchantCardContext();
+    String idempotencyKey = req.getIdempotencyKey();
+    Future<Transaction> idempotencyCheck = idempotencyKey != null && !idempotencyKey.isBlank()
+        ? repo.findByIdempotencyKey(idempotencyKey)
+        : Future.succeededFuture();
 
-    return repoMerchant.getMerchantByApiKey(req.getApiKey())
-        .map(merchantResp -> {
-          span.addEvent("merchant_found");
-          ctx.merchant = merchantResp.getData();
-          return ctx;
+    return idempotencyCheck
+        .compose(existing -> repoMerchant.getMerchantByApiKey(req.getApiKey())
+            .map(merchantResp -> {
+              span.addEvent("merchant_found");
+              ctx.merchant = merchantResp.getData();
+              return existing;
+            }))
+        .compose(existing -> {
+          if (existing != null) {
+            if (!matchesIdempotentRequest(existing, req)
+                || !Objects.equals(existing.getMerchantId(), ctx.merchant.getId())) {
+              return Future.failedFuture(new ConflictException(
+                  "Idempotency key was already used for a different transaction"));
+            }
+            ctx.transaction = existing;
+            ctx.replayed = true;
+            span.addEvent("idempotent_replay");
+            span.setAttribute("transaction.id", (long) existing.getId());
+            logger.info("Replaying existing transaction {} for idempotency key {}", existing.getId(), idempotencyKey);
+            return Future.succeededFuture(ctx);
+          }
+
+          return repoCard.getUserCardByCardNumber(req.getCardNumber())
+              .map((CardWithEmailResponse cardResp) -> {
+                span.addEvent("card_found");
+                ctx.userCard = cardResp;
+                return ctx;
+              });
         })
-        .compose(c -> repoCard.getUserCardByCardNumber(req.getCardNumber())
-            .map((CardWithEmailResponse cardResp) -> {
-              span.addEvent("card_found");
-              ctx.userCard = cardResp;
-              return c;
-            }))
-        .compose(c -> repoSaldo.getSaldoByCardNumber(req.getCardNumber())
-            .compose((ApiResponseSaldo saldoResp) -> {
-              int currentBalance = saldoResp.getData().getTotalBalance();
-              span.addEvent("saldo_found");
-
-              if (currentBalance < req.getAmount()) {
-                span.addEvent("insufficient_balance");
-                return Future.<MerchantCardContext>failedFuture(
-                    new BadRequestException("Insufficient balance for card: " + req.getCardNumber()));
-              }
-
-              ctx.originalBalance = currentBalance;
-              int newBalance = currentBalance - req.getAmount();
-              span.addEvent("saldo_deduct_start");
-
-              return repoSaldo.updateSaldoBalance(req.getCardNumber(), newBalance)
-                  .map(v -> {
-                    span.addEvent("saldo_deducted");
-                    return c;
-                  });
-            }))
         .compose(c -> {
+          if (c.replayed) {
+            return Future.succeededFuture(c);
+          }
+          // Reserve the idempotency key before any balance mutation. The unique
+          // index plus this lookup closes the concurrent retry window.
           span.addEvent("transaction_create_start");
           CreateTransactionRequest repoReq = req.toBuilder().setMerchantId(ctx.merchant.getId()).build();
+          return repo.createTransaction(repoReq).compose(created -> {
+            if (created != null) {
+              ctx.transaction = created;
+              return Future.succeededFuture(ctx);
+            }
+            if (idempotencyKey == null || idempotencyKey.isBlank()) {
+              return Future.<MerchantCardContext>failedFuture(
+                  new IllegalStateException("Transaction insert returned no row"));
+            }
+            return repo.findByIdempotencyKey(idempotencyKey).compose(raced -> {
+              if (raced == null) {
+                return Future.<MerchantCardContext>failedFuture(
+                    new IllegalStateException("Transaction reservation was lost"));
+              }
+              if (!matchesIdempotentRequest(raced, req)
+                  || !Objects.equals(raced.getMerchantId(), ctx.merchant.getId())) {
+                return Future.failedFuture(new ConflictException(
+                    "Idempotency key was already used for a different transaction"));
+              }
+              ctx.transaction = raced;
+              ctx.replayed = true;
+              return Future.succeededFuture(ctx);
+            });
+          });
+        })
+        .compose(c -> {
+          if (c.replayed) {
+            return Future.succeededFuture(c);
+          }
+          return repoSaldo.getSaldoByCardNumber(req.getCardNumber())
+              .compose((ApiResponseSaldo saldoResp) -> {
+                int currentBalance = saldoResp.getData().getTotalBalance();
+                span.addEvent("saldo_found");
 
-          return repo.createTransaction(repoReq)
-              .recover(err -> {
-                span.recordException(err != null ? err : new RuntimeException("Unknown error"));
-                span.addEvent("transaction_create_failed_rolling_back");
-                return repoSaldo.updateSaldoBalance(req.getCardNumber(), ctx.originalBalance)
-                    .compose(v -> {
-                      span.addEvent("saldo_rollback_success");
-                      if (ctx.transaction != null) {
-                        return repo.updateTransactionStatus(ctx.transaction.getId(), "failed")
-                            .compose(x -> Future.<Transaction>failedFuture(err));
-                      }
-                      return Future.<Transaction>failedFuture(err);
-                    })
-                    .recover(rollbackErr -> {
-                      logger.error("Failed to rollback saldo for card: {}", req.getCardNumber(), rollbackErr);
-                      return Future.<Transaction>failedFuture(err);
+                if (currentBalance < req.getAmount()) {
+                  span.addEvent("insufficient_balance");
+                  return markTransactionFailedAndFail(c,
+                      new BadRequestException("Insufficient balance for card: " + req.getCardNumber()));
+                }
+
+                ctx.originalBalance = currentBalance;
+                span.addEvent("saldo_deduct_start");
+                return repoSaldo.updateSaldoDelta(req.getCardNumber(), -req.getAmount())
+                    .map(v -> {
+                      span.addEvent("saldo_deducted");
+                      return c;
                     });
-              });
+              })
+              .recover(err -> markTransactionFailedAndFail(c, err));
         })
-        .compose(transaction -> {
-          span.addEvent("transaction_created");
-          ctx.transaction = transaction;
+        .compose(c -> {
+          if (c.replayed) {
+            return Future.succeededFuture(c);
+          }
           span.addEvent("transaction_mark_success");
-          return repo.updateTransactionStatus(transaction.getId(), "success").map(v -> transaction);
+          return repo.updateTransactionStatus(c.transaction.getId(), "success")
+              .compose(status -> {
+                span.addEvent("merchant_card_fetch_start");
+                return repoCard.getCardByUserId(c.merchant.getUserId())
+                    .map(cardResp -> {
+                      c.merchantCard = cardResp.getData();
+                      return c;
+                    });
+              })
+              .compose(updated -> repoSaldo.updateSaldoDelta(updated.merchantCard.getCardNumber(), req.getAmount())
+                  .map(v -> updated))
+              .recover(err -> compensateTransactionDebitAndFail(c, req, err));
         })
-        .compose(transaction -> {
-          span.addEvent("merchant_card_fetch_start");
-          return repoCard.getCardByUserId(ctx.merchant.getUserId())
-              .map(cardResp -> {
-                ctx.merchantCard = cardResp.getData();
-                return transaction;
-              });
+        .compose(c -> {
+          if (c.replayed) {
+            return Future.succeededFuture(c);
+          }
+          return sendTransactionEmail(c.userCard.getEmail(), req.getAmount(), c.transaction.getId())
+              .map(v -> c);
         })
-        .compose(transaction -> repoSaldo.getSaldoByCardNumber(ctx.merchantCard.getCardNumber())
-            .compose(merchantSaldoResp -> {
-              int newMerchantBalance = merchantSaldoResp.getData().getTotalBalance() + req.getAmount();
-              return repoSaldo.updateSaldoBalance(ctx.merchantCard.getCardNumber(), newMerchantBalance)
-                  .map(v -> transaction);
-            }))
-        .compose(transaction -> sendTransactionEmail(ctx.userCard.getEmail(), req.getAmount(), transaction.getId())
-            .map(v -> transaction))
-        .map(TransactionResponse::from)
+        .map(c -> TransactionResponse.from(c.transaction))
         .onSuccess(
             v -> tracingMetrics.completeSpanSuccess(tracingContext, "create", "Transaction created successfully"))
         .onFailure(err -> {
           logger.error("Failed to create transaction for card: {}", req.getCardNumber(), err);
           tracingMetrics.completeSpanError(tracingContext, "create", err.getMessage());
         });
+  }
+
+  private Future<MerchantCardContext> compensateTransactionDebitAndFail(
+      MerchantCardContext ctx, CreateTransactionRequest req, Throwable err) {
+    return repoSaldo.updateSaldoDelta(req.getCardNumber(), req.getAmount())
+        .recover(compensationErr -> {
+          logger.error("Failed to compensate transaction debit {}", ctx.transaction.getId(), compensationErr);
+          return Future.succeededFuture();
+        })
+        .compose(ignored -> repo.updateTransactionStatus(ctx.transaction.getId(), "failed")
+            .recover(statusErr -> Future.succeededFuture(ctx.transaction))
+            .compose(ignoredStatus -> Future.<MerchantCardContext>failedFuture(err)));
   }
 
   @Override
@@ -378,6 +447,7 @@ public class TransactionCommandServiceImpl implements TransactionCommandService 
     pb.card.Card.CardWithEmailResponse userCard;
     int originalBalance;
     Transaction transaction;
+    boolean replayed;
     pb.card.Card.CardResponse merchantCard;
   }
 

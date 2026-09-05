@@ -29,13 +29,21 @@ public class MerchantDocumentCommandRepositoryImpl implements MerchantDocumentCo
   @Override
   public Future<MerchantDocument> updateMerchantDocument(UpdateMerchantDocumentRequest request) {
     String sql = """
-        UPDATE merchant_documents SET document_type = $2, document_url = $3, status = $4, note = $5, updated_at = CURRENT_TIMESTAMP
+        UPDATE merchant_documents
+        SET document_type = COALESCE(NULLIF($2, ''), document_type),
+            document_url = COALESCE(NULLIF($3, ''), document_url),
+            status = COALESCE(NULLIF($4, ''), status),
+            note = COALESCE(NULLIF($5, ''), note),
+            updated_at = CURRENT_TIMESTAMP
         WHERE document_id = $1 AND deleted_at IS NULL
         RETURNING document_id AS id, merchant_id, document_type, document_url, status, note, created_at, updated_at, deleted_at
         """;
     return pool.preparedQuery(sql)
-        .execute(Tuple.of(request.getDocumentId(), request.getDocumentType(), request.getDocumentUrl(),
-            request.getStatus(), request.getNote()))
+        .execute(Tuple.of(request.getDocumentId(),
+            request.getDocumentType() != null ? request.getDocumentType() : "",
+            request.getDocumentUrl() != null ? request.getDocumentUrl() : "",
+            request.getStatus() != null ? request.getStatus() : "",
+            request.getNote() != null ? request.getNote() : ""))
         .map(rows -> rows.iterator().hasNext() ? MerchantDocument.fromRow(rows.iterator().next()) : null);
   }
 

@@ -29,7 +29,7 @@ public class CardCommandRepositoryImpl implements CardCommandRepository {
   @Override
   public Future<Card> createCard(CreateCardRequest request) {
     String cardNumber = generateRandomCardNumber();
-    String expireDate = ProtoConverter.formatExpDate(request.getExpireDate());
+    java.time.LocalDate expireDate = ProtoConverter.formatExpDate(request.getExpireDate());
 
     return pool
         .preparedQuery(
@@ -50,7 +50,8 @@ public class CardCommandRepositoryImpl implements CardCommandRepository {
 
   @Override
   public Future<Card> updateCard(UpdateCardRequest request) {
-    String expireDate = request.hasExpireDate() ? ProtoConverter.formatExpDate(request.getExpireDate()) : null;
+    java.time.LocalDate expireDate =
+        request.hasExpireDate() ? ProtoConverter.formatExpDate(request.getExpireDate()) : null;
 
     return pool
         .preparedQuery(

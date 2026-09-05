@@ -2,10 +2,12 @@ package io.example.common.grpc;
 
 import io.example.common.exception.grpc.BadRequestException;
 import io.example.common.exception.grpc.ConflictException;
+import io.example.common.exception.grpc.FailedPreconditionException;
 import io.example.common.exception.grpc.GrpcException;
 import io.example.common.exception.grpc.InsufficientBalanceException;
 import io.example.common.exception.grpc.InternalServerErrorException;
 import io.example.common.exception.grpc.NotFoundException;
+import io.example.common.exception.grpc.UnauthorizedException;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.vertx.core.Future;
@@ -59,6 +61,16 @@ public final class GrpcExceptionMapper {
             case ConflictException ce ->
                 Status.ALREADY_EXISTS
                         .withDescription(ce.getMessage())
+                        .asRuntimeException();
+
+            case FailedPreconditionException fpe ->
+                Status.FAILED_PRECONDITION
+                        .withDescription(fpe.getMessage())
+                        .asRuntimeException();
+
+            case UnauthorizedException ue ->
+                Status.UNAUTHENTICATED
+                        .withDescription(ue.getMessage())
                         .asRuntimeException();
 
             case InternalServerErrorException ie ->

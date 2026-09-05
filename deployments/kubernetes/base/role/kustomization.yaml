@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - role-deployment.yaml
-- role-service.yaml
 - role-hpa.yaml
+- role-service.yaml
+- pdb.yaml
+- network-policy.yaml

@@ -1,5 +1,8 @@
 package io.example.merchant.handler;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import io.example.common.grpc.GrpcExceptionMapper;
 import io.example.merchant.service.MerchantDocumentQueryService;
 import io.vertx.core.Future;
@@ -14,6 +17,7 @@ import pb.merchant_document.MerchantDocumentQuery.ApiResponsePaginationMerchantD
 public class MerchantDocumentQueryHandler implements
     pb.merchant_document.VertxMerchantDocumentQueryServiceGrpcServer.MerchantDocumentQueryServiceApi {
 
+  private static final Logger log = LoggerFactory.getLogger(MerchantDocumentQueryHandler.class);
   private final MerchantDocumentQueryService service;
 
   private pb.common.PaginationMeta buildPaginationMeta(int page, int pageSize, int totalRecords) {

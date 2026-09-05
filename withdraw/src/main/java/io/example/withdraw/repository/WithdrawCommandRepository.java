@@ -9,7 +9,13 @@ import io.vertx.core.Future;
 public interface WithdrawCommandRepository {
   Future<Withdraw> createWithdraw(CreateWithdrawRequest req);
 
+  Future<Withdraw> createWithdraw(CreateWithdrawRequest req, long dailyLimit);
+
+  Future<Withdraw> findByIdempotencyKey(String idempotencyKey);
+
   Future<Withdraw> updateWithdraw(UpdateWithdrawRequest req);
+
+  Future<Withdraw> updateWithdraw(UpdateWithdrawRequest req, long dailyLimit);
 
   Future<Withdraw> updateWithdrawStatus(UpdateWithdrawStatus req);
 

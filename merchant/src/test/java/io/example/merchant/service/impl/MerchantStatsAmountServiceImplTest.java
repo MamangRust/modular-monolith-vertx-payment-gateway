@@ -1,0 +1,102 @@
+package io.example.merchant.service.impl;
+
+import io.example.common.observability.TracingMetrics.TracingContext;
+import io.example.common.observability.TracingMetrics;
+import io.example.common.service.RedisService;
+import io.example.merchant.model.MerchantStats;
+import io.example.merchant.repository.MerchantStatsAmountRepository;
+import io.vertx.core.Future;
+import io.vertx.junit5.VertxExtension;
+import io.vertx.junit5.VertxTestContext;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import pb.merchant.Merchant.FindYearMerchant;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+
+@ExtendWith({MockitoExtension.class, VertxExtension.class})
+@org.mockito.junit.jupiter.MockitoSettings(strictness = org.mockito.quality.Strictness.LENIENT)
+class MerchantStatsAmountServiceImplTest {
+
+  @Mock
+  private MerchantStatsAmountRepository repo;
+
+  @Mock
+  private RedisService redis;
+
+  @Mock
+  private TracingMetrics tracingMetrics;
+
+  private MerchantStatsAmountServiceImpl service;
+
+  @BeforeEach
+  void setUp() {
+    service = new MerchantStatsAmountServiceImpl(repo, redis, tracingMetrics);
+  }
+
+  private void mockTracing() {
+    var tc = new TracingContext(io.opentelemetry.context.Context.root(), java.time.Instant.now());
+    when(tracingMetrics.startSpan(any(String.class))).thenReturn(tc);
+    when(tracingMetrics.startSpan(any(String.class), any())).thenReturn(tc);
+  }
+
+  @Test
+  @DisplayName("getMonthlyAmounts cache hit")
+  void getMonthlyAmountsCacheHit(VertxTestContext ctx) {
+    mockTracing();
+    var json = """
+        [{"month":"Jan","amount":100}]
+        """;
+    when(redis.get("stats:amount:global:monthly:2026")).thenReturn(Future.succeededFuture(json));
+
+    var req = FindYearMerchant.newBuilder().setYear(2026).build();
+    service.getMonthlyAmounts(req)
+        .onComplete(ctx.succeeding(res -> ctx.verify(() -> {
+          assertThat(res).hasSize(1);
+          assertThat(res.get(0).getAmount()).isEqualTo(100L);
+          ctx.completeNow();
+        })));
+  }
+
+  @Test
+  @DisplayName("getMonthlyAmounts cache miss")
+  void getMonthlyAmountsCacheMiss(VertxTestContext ctx) {
+    mockTracing();
+    List<MerchantStats.MonthAmount> data = List.of(new MerchantStats.MonthAmount("Jan", 100L));
+    when(redis.get("stats:amount:global:monthly:2026")).thenReturn(Future.succeededFuture(null));
+    when(repo.getMonthlyAmountMerchant(2026)).thenReturn(Future.succeededFuture(data));
+    when(redis.setJson(any(), any(Object.class), any())).thenReturn(Future.succeededFuture("OK"));
+
+    var req = FindYearMerchant.newBuilder().setYear(2026).build();
+    service.getMonthlyAmounts(req)
+        .onComplete(ctx.succeeding(res -> ctx.verify(() -> {
+          assertThat(res).hasSize(1);
+          ctx.completeNow();
+        })));
+  }
+
+  @Test
+  @DisplayName("getYearlyAmounts cache miss")
+  void getYearlyAmountsCacheMiss(VertxTestContext ctx) {
+    mockTracing();
+    List<MerchantStats.YearAmount> data = List.of(new MerchantStats.YearAmount("2026", 1000L));
+    when(redis.get("stats:amount:global:yearly:2026")).thenReturn(Future.succeededFuture(null));
+    when(repo.getYearlyAmountMerchant(2026)).thenReturn(Future.succeededFuture(data));
+    when(redis.setJson(any(), any(Object.class), any())).thenReturn(Future.succeededFuture("OK"));
+
+    var req = FindYearMerchant.newBuilder().setYear(2026).build();
+    service.getYearlyAmounts(req)
+        .onComplete(ctx.succeeding(res -> ctx.verify(() -> {
+          assertThat(res).hasSize(1);
+          ctx.completeNow();
+        })));
+  }
+}

@@ -116,7 +116,7 @@ public class MerchantTransactionServiceImpl implements MerchantTransactionServic
     int page = safePage(req.getPage());
     int pageSize = safePageSize(req.getPageSize());
     String keyword = safeKeyword(req.getSearch());
-    String cacheKey = String.format("%smerchant:%d:p:%d:s:%d:k:%s", CACHE_PREFIX, req.getId(), page, pageSize, keyword);
+    String cacheKey = String.format("%smerchant:%s:p:%d:s:%d:k:%s", CACHE_PREFIX, req.getId(), page, pageSize, keyword);
 
     return redis.get(cacheKey)
         .compose(jsonStr -> {

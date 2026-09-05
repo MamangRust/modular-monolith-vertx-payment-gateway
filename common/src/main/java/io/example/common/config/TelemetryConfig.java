@@ -1,5 +1,6 @@
 package io.example.common.config;
 
+import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
@@ -24,6 +25,7 @@ import io.vertx.core.json.JsonObject;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TelemetryConfig {
 
@@ -39,6 +41,54 @@ public class TelemetryConfig {
   private RuntimeMetrics runtimeMetrics;
   private Tracer tracer;
 
+  /**
+   * True when this instance reused an already-registered global SDK (worker
+   * verticles deployed in the same JVM as the main verticle). In that case
+   * {@link #shutdown()} must not close the shared providers, and JVM runtime
+   * metrics are skipped because the first registrant already started them.
+   */
+  private boolean sharedGlobalSdk;
+
+  /**
+   * Set by the first verticle in this JVM that registers the real global SDK.
+   * {@link #tryGetGlobal()} only reuses that SDK when this flag is set.
+   */
+  private static final AtomicBoolean GLOBAL_SDK_REGISTERED = new AtomicBoolean(false);
+
+  /**
+   * Returns the globally registered SDK, or null when it was not registered by
+   * this class in this JVM.
+   *
+   * <p>Why the flag: {@link GlobalOpenTelemetry#get()} never throws in the
+   * bundled SDK version - when nothing was registered it returns
+   * {@code OpenTelemetry.noop()} (or an auto-configured SDK when the
+   * autoconfigure module is present), never null. Reusing that fallback
+   * silently disables all telemetry (no OTLP export, no JFR metrics, no logs).
+   * Treating only our own registration as "existing" keeps the worker verticle
+   * reuse benefit while guaranteeing a real SDK is always built when this is
+   * the first registrant. Verticle starts in a JVM are sequential (workers
+   * deploy only after the main {@code start()} completes), so the window
+   * between {@code buildAndRegisterGlobal()} and this flag being set cannot
+   * cause a double registration.
+   *
+   * <p>Tradeoff: worker verticles reuse the main SDK, whose resource carries the
+   * main verticle's {@code service.name}. Worker spans therefore get that
+   * resource-level attribution (scope name stays the worker's own config value),
+   * while metric counters are unaffected because {@code TracingMetrics} takes an
+   * explicit service name. This is preferable to the previous double-register
+   * crash that prevented worker verticles from deploying at all.
+   */
+  private static OpenTelemetry tryGetGlobal() {
+    if (!GLOBAL_SDK_REGISTERED.get()) {
+      return null;
+    }
+    try {
+      return GlobalOpenTelemetry.get();
+    } catch (IllegalStateException e) {
+      return null;
+    }
+  }
+
   public TelemetryConfig(JsonObject config) {
     this.otlpEndpoint = config.getString("otel.exporter.otlp.endpoint", "http://otel-collector:4317");
     this.serviceName = config.getString("service.name", "apigateway");
@@ -47,6 +97,17 @@ public class TelemetryConfig {
   }
 
   public OpenTelemetry initialize() {
+    // buildAndRegisterGlobal() throws if a global SDK was already registered.
+    // The main verticle registers first; worker verticles in the same JVM (fraud
+    // scorer, billing scheduler) must reuse it instead of failing to deploy.
+    OpenTelemetry existing = tryGetGlobal();
+    if (existing != null) {
+      this.openTelemetry = existing;
+      this.tracer = existing.getTracer(serviceName, serviceVersion);
+      this.sharedGlobalSdk = true;
+      return existing;
+    }
+
     Resource resource = Resource.getDefault()
         .merge(Resource.create(Objects.requireNonNull(Attributes.of(
             Objects.requireNonNull(AttributeKey.stringKey("service.name")), Objects.requireNonNull(serviceName),
@@ -93,6 +154,9 @@ public class TelemetryConfig {
         .setPropagators(Objects.requireNonNull(ContextPropagators.create(Objects.requireNonNull(W3CTraceContextPropagator.getInstance()))))
         .buildAndRegisterGlobal();
 
+    // Registered by us: from now on, worker verticles in this JVM may reuse it.
+    GLOBAL_SDK_REGISTERED.set(true);
+
     tracer = openTelemetry.getTracer(Objects.requireNonNull(serviceName), Objects.requireNonNull(serviceVersion));
 
     OpenTelemetryAppender.install(openTelemetry);
@@ -126,6 +190,12 @@ public class TelemetryConfig {
   }
 
   public void shutdown() {
+    if (sharedGlobalSdk) {
+      // Never close providers that another verticle in this JVM still uses.
+      System.out.println("✅ Using shared global OpenTelemetry — skipping provider shutdown");
+      return;
+    }
+
     if (runtimeMetrics != null) {
       try {
         runtimeMetrics.close();

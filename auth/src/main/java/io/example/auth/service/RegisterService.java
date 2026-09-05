@@ -46,11 +46,11 @@ public class RegisterService {
                     String passwordHash = BCrypt.withDefaults().hashToString(12, request.getPassword().toCharArray());
                     request.setPassword(passwordHash);
 
-                    return roleRepository.findByName("ROLE_ADMIN");
+                    return roleRepository.findByName("ROLE_USER");
                 })
                 .compose(role -> {
                     if (role == null) {
-                        return Future.failedFuture(new NotFoundException("Default role not found: ROLE_ADMIN"));
+                        return Future.failedFuture(new NotFoundException("Default role not found: ROLE_USER"));
                     }
 
                     String verificationCode = UUID.randomUUID().toString().substring(0, 10);

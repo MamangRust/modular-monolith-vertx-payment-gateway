@@ -105,12 +105,17 @@ public class TransactionProxyHandler {
     JsonObject body = ctx.body().asJsonObject();
     pb.merchant.Merchant.MerchantResponse merchant = ctx.get("merchant");
     int merchantId = merchant != null ? merchant.getId() : 0;
+    // ApiKeyMiddleware stores the validated key in the context; it must be
+    // forwarded to the command service which re-resolves the merchant by key.
+    String apiKey = ctx.get("apiKey");
 
     var req = TransactionCommand.CreateTransactionRequest.newBuilder()
+        .setApiKey(apiKey != null ? apiKey : GrpcGatewayUtils.getJsonString(body, "api_key", ""))
         .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
         .setAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
         .setPaymentMethod(GrpcGatewayUtils.getJsonString(body, "payment_method", ""))
         .setMerchantId(merchantId)
+        .setIdempotencyKey(GrpcGatewayUtils.getJsonString(body, "idempotency_key", ""))
         .build();
     commandClient.createTransaction(req)
         .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))
@@ -121,9 +126,11 @@ public class TransactionProxyHandler {
     JsonObject body = ctx.body().asJsonObject();
     pb.merchant.Merchant.MerchantResponse merchant = ctx.get("merchant");
     int merchantId = merchant != null ? merchant.getId() : 0;
+    String apiKey = ctx.get("apiKey");
 
     var req = TransactionCommand.UpdateTransactionRequest.newBuilder()
         .setTransactionId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+        .setApiKey(apiKey != null ? apiKey : GrpcGatewayUtils.getJsonString(body, "api_key", ""))
         .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
         .setAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
         .setPaymentMethod(GrpcGatewayUtils.getJsonString(body, "payment_method", ""))

@@ -13,6 +13,7 @@ import pb.saldo.SaldoCommand.ApiResponseSaldoAll;
 import pb.saldo.SaldoCommand.ApiResponseSaldoDelete;
 import pb.saldo.SaldoCommand.CreateSaldoRequest;
 import pb.saldo.SaldoCommand.UpdateSaldoBalanceRequest;
+import pb.saldo.SaldoCommand.UpdateSaldoDeltaRequest;
 import pb.saldo.SaldoCommand.UpdateSaldoRequest;
 import pb.saldo.SaldoCommand.UpdateSaldoWithdrawRequest;
 
@@ -61,6 +62,22 @@ public class SaldoCommandHandler implements pb.saldo.VertxSaldoCommandServiceGrp
         .build();
 
     return service.updateSaldoBalance(domainReq)
+        .map(data -> ApiResponseSaldo.newBuilder()
+            .setStatus("success")
+            .setMessage("OK")
+            .setData(ProtoConverter.fromSaldoResponse(data))
+            .build())
+        .recover(GrpcExceptionMapper::toFailedFuture);
+  }
+
+  @Override
+  public Future<ApiResponseSaldo> updateSaldoDelta(UpdateSaldoDeltaRequest req) {
+    var domainReq = io.example.saldo.domain.requests.UpdateSaldoDeltaRequest.builder()
+        .cardNumber(req.getCardNumber())
+        .delta((long) req.getDelta())
+        .build();
+
+    return service.updateSaldoDelta(domainReq)
         .map(data -> ApiResponseSaldo.newBuilder()
             .setStatus("success")
             .setMessage("OK")

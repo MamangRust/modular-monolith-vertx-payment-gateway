@@ -42,12 +42,18 @@ public class MerchantCommandRepositoryImpl implements MerchantCommandRepository 
   public Future<Merchant> updateMerchant(UpdateMerchantRequest request) {
     String sql = """
         UPDATE merchants
-        SET name = $2, user_id = $3, status = $4, updated_at = CURRENT_TIMESTAMP
+        SET name = COALESCE(NULLIF($2, ''), name),
+            user_id = COALESCE(NULLIF($3, 0), user_id),
+            status = COALESCE(NULLIF($4, ''), status),
+            updated_at = CURRENT_TIMESTAMP
         WHERE merchant_id = $1 AND deleted_at IS NULL
         RETURNING merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at
         """;
     return pool.preparedQuery(sql)
-        .execute(Tuple.of(request.getMerchantId(), request.getName(), request.getUserId(), request.getStatus()))
+        .execute(Tuple.of(request.getMerchantId(),
+            request.getName() != null ? request.getName() : "",
+            request.getUserId(),
+            request.getStatus() != null ? request.getStatus() : ""))
         .map(rows -> rows.iterator().hasNext() ? Merchant.fromRow(rows.iterator().next()) : null);
   }
 
@@ -55,11 +61,13 @@ public class MerchantCommandRepositoryImpl implements MerchantCommandRepository 
   public Future<Merchant> updateMerchantStatus(UpdateMerchantStatusRequest request) {
     String sql = """
         UPDATE merchants
-        SET status = $2, updated_at = CURRENT_TIMESTAMP
+        SET status = COALESCE(NULLIF($2, ''), status),
+            updated_at = CURRENT_TIMESTAMP
         WHERE merchant_id = $1 AND deleted_at IS NULL
         RETURNING merchant_id AS id, name, api_key, user_id, status, created_at, updated_at, deleted_at
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(request.getMerchantId(), request.getStatus()))
+    return pool.preparedQuery(sql).execute(Tuple.of(request.getMerchantId(),
+        request.getStatus() != null ? request.getStatus() : ""))
         .map(rows -> rows.iterator().hasNext() ? Merchant.fromRow(rows.iterator().next()) : null);
   }
 

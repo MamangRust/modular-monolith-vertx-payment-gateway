@@ -68,29 +68,18 @@ public class RoleQueryServiceImpl implements RoleQueryService {
     int page = safePage(req.getPage());
     int pageSize = safePageSize(req.getPageSize());
     String keyword = safeKeyword(req.getSearch());
-    String cacheKey = String.format("%sall:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);
-
-    return redis.getJson(cacheKey, PagedResult.class)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("role.cache_hit", true);
-            @SuppressWarnings("unchecked")
-            PagedResult<Role> typedCached = (PagedResult<Role>) cached;
-            return Future.succeededFuture(mapRolePagination(typedCached, page, pageSize));
-          }
-          span.setAttribute("role.cache_hit", false);
-          return repo.getRoles(req)
-              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(result))
-              .map(result -> mapRolePagination(result, page, pageSize));
-        })
+    String cacheKey = String.format("%sall:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);    // PagedResult<T> generic type erases during Jackson deserialization,
+    // so we bypass Redis cache for paginated queries and go straight to DB.
+    return repo.getRoles(req)
+        .map(result -> mapRolePagination(result, page, pageSize))
         .onSuccess(resp -> {
-          span.setAttribute("roles.count", (long) resp.getData().size());
-          span.setAttribute("roles.total_records", (long) resp.getTotalRecords());
-          metrics.completeSpanSuccess(ctx, "get_all", "Roles fetched successfully");
+            span.setAttribute("roles.count", (long) resp.getData().size());
+            span.setAttribute("roles.total_records", (long) resp.getTotalRecords());
+            metrics.completeSpanSuccess(ctx, "get_all", "Roles fetched successfully");
         })
         .onFailure(err -> {
-          logger.error("Failed to fetch roles", err);
-          metrics.completeSpanError(ctx, "get_all", err.getMessage());
+            logger.error("Failed to fetch roles", err);
+            metrics.completeSpanError(ctx, "get_all", err.getMessage());
         });
   }
 
@@ -102,29 +91,16 @@ public class RoleQueryServiceImpl implements RoleQueryService {
     int page = safePage(req.getPage());
     int pageSize = safePageSize(req.getPageSize());
     String keyword = safeKeyword(req.getSearch());
-    String cacheKey = String.format("%sactive:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);
-
-    return redis.getJson(cacheKey, PagedResult.class)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("role.cache_hit", true);
-            @SuppressWarnings("unchecked")
-            PagedResult<Role> typedCached = (PagedResult<Role>) cached;
-            return Future.succeededFuture(mapRolePaginationDeleteAt(typedCached, page, pageSize));
-          }
-          span.setAttribute("role.cache_hit", false);
-          return repo.getActiveRoles(req)
-              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(result))
-              .map(result -> mapRolePaginationDeleteAt(result, page, pageSize));
-        })
+    String cacheKey = String.format("%sactive:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);    return repo.getActiveRoles(req)
+        .map(result -> mapRolePaginationDeleteAt(result, page, pageSize))
         .onSuccess(resp -> {
-          span.setAttribute("roles.count", (long) resp.getData().size());
-          span.setAttribute("roles.total_records", (long) resp.getTotalRecords());
-          metrics.completeSpanSuccess(ctx, "get_active", "Active roles fetched successfully");
+            span.setAttribute("roles.count", (long) resp.getData().size());
+            span.setAttribute("roles.total_records", (long) resp.getTotalRecords());
+            metrics.completeSpanSuccess(ctx, "get_active", "Active roles fetched successfully");
         })
         .onFailure(err -> {
-          logger.error("Failed to fetch active roles", err);
-          metrics.completeSpanError(ctx, "get_active", err.getMessage());
+            logger.error("Failed to fetch active roles", err);
+            metrics.completeSpanError(ctx, "get_active", err.getMessage());
         });
   }
 
@@ -136,29 +112,16 @@ public class RoleQueryServiceImpl implements RoleQueryService {
     int page = safePage(req.getPage());
     int pageSize = safePageSize(req.getPageSize());
     String keyword = safeKeyword(req.getSearch());
-    String cacheKey = String.format("%strashed:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);
-
-    return redis.getJson(cacheKey, PagedResult.class)
-        .compose(cached -> {
-          if (cached != null) {
-            span.setAttribute("role.cache_hit", true);
-            @SuppressWarnings("unchecked")
-            PagedResult<Role> typedCached = (PagedResult<Role>) cached;
-            return Future.succeededFuture(mapRolePaginationDeleteAt(typedCached, page, pageSize));
-          }
-          span.setAttribute("role.cache_hit", false);
-          return repo.getTrashedRoles(req)
-              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(result))
-              .map(result -> mapRolePaginationDeleteAt(result, page, pageSize));
-        })
+    String cacheKey = String.format("%strashed:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);    return repo.getTrashedRoles(req)
+        .map(result -> mapRolePaginationDeleteAt(result, page, pageSize))
         .onSuccess(resp -> {
-          span.setAttribute("roles.count", (long) resp.getData().size());
-          span.setAttribute("roles.total_records", (long) resp.getTotalRecords());
-          metrics.completeSpanSuccess(ctx, "get_trashed", "Trashed roles fetched successfully");
+            span.setAttribute("roles.count", (long) resp.getData().size());
+            span.setAttribute("roles.total_records", (long) resp.getTotalRecords());
+            metrics.completeSpanSuccess(ctx, "get_trashed", "Trashed roles fetched successfully");
         })
         .onFailure(err -> {
-          logger.error("Failed to fetch trashed roles", err);
-          metrics.completeSpanError(ctx, "get_trashed", err.getMessage());
+            logger.error("Failed to fetch trashed roles", err);
+            metrics.completeSpanError(ctx, "get_trashed", err.getMessage());
         });
   }
 

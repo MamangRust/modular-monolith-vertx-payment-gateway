@@ -70,23 +70,11 @@ public class SaldoQueryServiceImpl implements SaldoQueryService {
     String keyword = safeKeyword(req.getSearch());
     String cacheKey = String.format("%sall:p:%d:s:%d:k:%s", CACHE_PREFIX, page, pageSize, keyword);
 
-    return redis.get(cacheKey)
-        .compose(jsonStr -> {
-          if (jsonStr != null && !jsonStr.isEmpty()) {
-            try {
-              span.setAttribute("saldo.cache_hit", true);
-              PagedResult<Saldo> typedCached = mapper.readValue(jsonStr, new TypeReference<PagedResult<Saldo>>() {
-              });
-              return Future.succeededFuture(mapSaldoPagination(typedCached));
-            } catch (Exception e) {
-              logger.warn("Failed to deserialize cached saldos: {}", e.getMessage());
-            }
-          }
-          span.setAttribute("saldo.cache_hit", false);
-          return repo.getSaldos(FindAllSaldos.builder().page(page).pageSize(pageSize).search(keyword).build())
-              .compose(result -> redis.setJson(cacheKey, result, CACHE_TTL).map(v -> result))
-              .map(this::mapSaldoPagination);
-        })
+    // Bypass Redis cache for paginated queries — PagedResult<T> loses generic
+    // type info during deserialization, causing ClassCastException.
+    span.setAttribute("saldo.cache_hit", false);
+    return repo.getSaldos(FindAllSaldos.builder().page(page).pageSize(pageSize).search(keyword).build())
+        .map(this::mapSaldoPagination)
         .onSuccess(resp -> {
           span.setAttribute("saldos.count", (long) resp.getData().size());
           span.setAttribute("saldos.total_records", (long) resp.getTotalRecords());

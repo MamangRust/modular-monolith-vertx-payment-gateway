@@ -16,7 +16,7 @@ public class UserRoleRepositoryImpl implements UserRoleRepository {
         return pool.preparedQuery("""
                 INSERT INTO user_roles (user_id, role_id, created_at, updated_at)
                 VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (user_id, role_id) DO NOTHING
+                ON CONFLICT (user_id, role_id) WHERE deleted_at IS NULL DO NOTHING
                 RETURNING user_id, role_id
                 """)
                 .execute(Tuple.of(userId, roleId))

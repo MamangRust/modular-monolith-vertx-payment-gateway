@@ -47,7 +47,7 @@ public class TransferStatsStatusRepositoryImpl implements TransferStatsStatusRep
                    COALESCE(m.cnt, 0)::integer AS %s, COALESCE(m.amt, 0)::bigint AS total_amount
             FROM periods p
             LEFT JOIN monthly_data m ON m.yr = EXTRACT(YEAR FROM p.st)::integer AND m.mo = EXTRACT(MONTH FROM p.st)::integer
-            ORDER BY year DESC, TO_DATE(month, 'Mon') DESC
+            ORDER BY year DESC, p.st DESC
             """,
         countCol);
 

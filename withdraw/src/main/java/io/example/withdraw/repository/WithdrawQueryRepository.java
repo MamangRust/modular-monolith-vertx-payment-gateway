@@ -21,4 +21,6 @@ public interface WithdrawQueryRepository {
   Future<PagedResult<Withdraw>> getWithdrawsByCardNumber(String card, String search, int page, int pageSize);
 
   Future<List<Withdraw>> getWithdrawsByCardNumberPrimitive(String card);
+
+  Future<Long> getTodaySuccessfulAmount(String card);
 }

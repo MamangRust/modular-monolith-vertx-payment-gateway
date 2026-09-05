@@ -1,5 +1,6 @@
 package io.example.user.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Row;
 import lombok.AllArgsConstructor;
@@ -16,6 +17,10 @@ import java.time.format.DateTimeParseException;
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
+// The shared "user:<id>" cache key is also written by the auth service with a
+// richer payload (AuthUser carries a "roles" array). Tolerate unknown fields so
+// cached entries written by the other service decode without failure.
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class User {
   private Integer userId;
   private String firstname;

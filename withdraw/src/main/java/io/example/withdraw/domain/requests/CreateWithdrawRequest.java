@@ -15,4 +15,5 @@ public class CreateWithdrawRequest {
     private String cardNumber;
     private int withdrawAmount;
     private OffsetDateTime withdrawTime;
+    private String idempotencyKey;
 }

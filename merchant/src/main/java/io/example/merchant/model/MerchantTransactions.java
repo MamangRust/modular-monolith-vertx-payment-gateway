@@ -38,16 +38,16 @@ public class MerchantTransactions {
         .put("merchant_name", merchantName);
 
     if (transactionTime != null) {
-      json.put("transaction_time", transactionTime.toString());
+      json.put("transaction_time", transactionTime.toInstant().toString());
     }
     if (createdAt != null) {
-      json.put("created_at", createdAt.toString());
+      json.put("created_at", createdAt.toInstant().toString());
     }
     if (updatedAt != null) {
-      json.put("updated_at", updatedAt.toString());
+      json.put("updated_at", updatedAt.toInstant().toString());
     }
     if (deletedAt != null) {
-      json.put("deleted_at", deletedAt.toString());
+      json.put("deleted_at", deletedAt.toInstant().toString());
     }
 
     return json;

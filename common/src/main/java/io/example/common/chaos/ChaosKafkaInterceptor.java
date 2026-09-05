@@ -43,9 +43,16 @@ public class ChaosKafkaInterceptor implements InvocationHandler {
 
   /**
    * Wrap a {@link KafkaProducer} with chaos interception.
+   *
+   * <p>Returns the producer unwrapped unless {@code CHAOS_ENABLED=true}.
    */
   @SuppressWarnings("unchecked")
   public static <K, V> KafkaProducer<K, V> wrap(KafkaProducer<K, V> producer, ChaosManager manager, Vertx vertx) {
+    if (!ChaosManager.isChaosEnabled()) {
+      return producer;
+    }
+    log.warn("⚠️ {}=true — Kafka producer chaos interceptor installed",
+        ChaosManager.CHAOS_ENABLED_ENV);
     return (KafkaProducer<K, V>) Proxy.newProxyInstance(
         KafkaProducer.class.getClassLoader(),
         new Class<?>[]{KafkaProducer.class},

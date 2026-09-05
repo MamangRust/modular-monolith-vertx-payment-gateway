@@ -29,7 +29,7 @@ message ApiResponsePaginationMerchantTransaction {
 }
 
 service MerchantTransactionService {
-  rpc FindAllTransactionMerchant(FindAllMerchantRequest)
+  rpc FindAllTransactionMerchant(FindAllMerchantTransaction)
       returns (ApiResponsePaginationMerchantTransaction) {}
   rpc FindAllTransactionByApikey(FindAllMerchantTransactionApikey)
       returns (ApiResponsePaginationMerchantTransaction) {}

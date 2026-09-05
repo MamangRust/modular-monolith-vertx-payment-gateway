@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.example.common.exception.grpc.BadRequestException;
+import io.example.common.exception.grpc.ConflictException;
 import io.example.common.exception.grpc.InsufficientBalanceException;
 import io.example.common.exception.grpc.NotFoundException;
 import io.example.common.observability.TracingMetrics;
@@ -14,7 +15,6 @@ import io.example.common.service.KafkaService;
 import io.example.common.service.RedisService;
 import io.example.common.utils.EmailTemplate;
 import io.example.withdraw.domain.requests.CreateWithdrawRequest;
-import io.example.withdraw.domain.requests.UpdateSaldoBalance;
 import io.example.withdraw.domain.requests.UpdateWithdrawRequest;
 import io.example.withdraw.domain.requests.UpdateWithdrawStatus;
 import io.example.withdraw.model.Withdraw;
@@ -45,6 +45,8 @@ public class WithdrawCommandServiceImpl implements WithdrawCommandService {
   private final KafkaService kafkaService;
   private final TracingMetrics tracingMetrics;
 
+  private static final int DEFAULT_DAILY_WITHDRAW_LIMIT = 10_000_000;
+
   @Override
   public Future<WithdrawResponse> createWithdraw(CreateWithdrawRequest req) {
     var tracingCtx = tracingMetrics.startSpan(
@@ -53,68 +55,158 @@ public class WithdrawCommandServiceImpl implements WithdrawCommandService {
             .put("card.number", req.getCardNumber())
             .put("withdraw.amount", (long) req.getWithdrawAmount())
             .build());
-
     Span span = Span.fromContext(Objects.requireNonNull(tracingCtx.getContext()));
-    logger.info("Creating withdrawal for card: {}, amount: {}", req.getCardNumber(), req.getWithdrawAmount());
 
-    return repoCard.findUserCardByCardNumber(req.getCardNumber())
-        .<WithdrawResponse>compose(cardResp -> repoSaldo.getSaldoByCardNumber(req.getCardNumber())
-            .<WithdrawResponse>compose(saldoResp -> {
-              int currentBalance = saldoResp.getData().getTotalBalance();
+    if (req.getWithdrawAmount() <= 0 || req.getCardNumber() == null || req.getCardNumber().isBlank()) {
+      return Future.<WithdrawResponse>failedFuture(
+          new BadRequestException("card_number and withdraw amount must be valid"));
+    }
 
-              if (currentBalance < req.getWithdrawAmount()) {
-                return Future.<WithdrawResponse>failedFuture(
-                    new InsufficientBalanceException(currentBalance, req.getWithdrawAmount()));
-              }
+    String idempotencyKey = req.getIdempotencyKey();
+    Future<Withdraw> existingFuture = idempotencyKey != null && !idempotencyKey.isBlank()
+        ? repo.findByIdempotencyKey(idempotencyKey)
+        : Future.succeededFuture();
 
-              int newBalance = currentBalance - req.getWithdrawAmount();
-              span.addEvent("deducting_saldo");
+    return existingFuture
+        // Card validation also happens on replay, so a key cannot bypass the
+        // normal card/user boundary.
+        .compose(existing -> repoCard.findUserCardByCardNumber(req.getCardNumber())
+            .map(card -> new WithdrawCreateContext(card, existing)))
+        .compose(ctx -> {
+          if (ctx.existing != null) {
+            if (!matchesIdempotentRequest(ctx.existing, req)) {
+              return Future.<WithdrawCreateContext>failedFuture(new ConflictException(
+                  "Idempotency key was already used for a different withdrawal"));
+            }
+            span.addEvent("idempotent_replay");
+            return Future.succeededFuture(ctx);
+          }
 
-              // ✅ FIX 1: Gunakan domain request builder untuk update saldo
-              var saldoReq = UpdateSaldoBalance.builder()
-                  .cardNumber(req.getCardNumber())
-                  .totalBalance(newBalance)
-                  .build();
-
-              return repoSaldo.updateSaldoBalance(saldoReq)
-                  .compose(v -> {
-                    span.addEvent("creating_withdraw_record");
-                    return repo.createWithdraw(req);
-                  })
-                  .compose(withdraw -> {
-                    span.addEvent("marking_withdraw_success");
-                    // ✅ FIX 2: Gunakan domain request builder untuk update status
-                    var statusReq = UpdateWithdrawStatus.builder()
-                        .withdrawId(withdraw.getId())
-                        .status("success")
-                        .build();
-                    return repo.updateWithdrawStatus(statusReq);
-                  })
-                  .compose(updated -> invalidateCache(updated.getId())
-                      .<Withdraw>map(v -> updated)) // ✅ FIX 3: Type witness <Withdraw>
-                  .compose(updated -> sendWithdrawEmail(
-                      cardResp.getEmail(), req.getWithdrawAmount(), updated.getId(), "create")
-                      .<Withdraw>map(v -> updated)) // ✅ FIX 3: Type witness <Withdraw>
-                  .map(updated -> {
-                    tracingMetrics.completeSpanSuccess(tracingCtx, "create",
-                        "Withdrawal created successfully");
-                    return WithdrawResponse.from(updated);
-                  })
-                  .recover(err -> {
-                    logger.error("Failed to create withdraw record, rolling back balance", err);
-                    // ✅ FIX 4: Gunakan domain request builder untuk rollback saldo
-                    var rollbackReq = UpdateSaldoBalance.builder()
-                        .cardNumber(req.getCardNumber())
-                        .totalBalance(currentBalance)
-                        .build();
-                    return repoSaldo.updateSaldoBalance(rollbackReq)
-                        .compose(rv -> Future.<WithdrawResponse>failedFuture(err));
-                  });
-            }))
+          long dailyLimit = configuredDailyLimit();
+          return queryRepo.getTodaySuccessfulAmount(req.getCardNumber())
+              .compose(today -> {
+                if (today + req.getWithdrawAmount() > dailyLimit) {
+                  return Future.<WithdrawCreateContext>failedFuture(new BadRequestException(
+                      "Daily withdrawal limit exceeded"));
+                }
+                return repoSaldo.getSaldoByCardNumber(req.getCardNumber())
+                    .compose(saldo -> {
+                      int currentBalance = saldo.getData().getTotalBalance();
+                      if (currentBalance < req.getWithdrawAmount()) {
+                        return Future.<WithdrawCreateContext>failedFuture(
+                            new InsufficientBalanceException(currentBalance, req.getWithdrawAmount()));
+                      }
+                      return repo.createWithdraw(req, dailyLimit).compose(created -> {
+                  if (created != null) {
+                    ctx.withdraw = created;
+                    return Future.succeededFuture(ctx);
+                  }
+                  if (idempotencyKey == null || idempotencyKey.isBlank()) {
+                    return Future.<WithdrawCreateContext>failedFuture(
+                        new IllegalStateException("Withdrawal insert returned no row"));
+                  }
+                  return repo.findByIdempotencyKey(idempotencyKey).compose(raced -> {
+                    if (raced == null || !matchesIdempotentRequest(raced, req)) {
+                      return Future.<WithdrawCreateContext>failedFuture(new ConflictException(
+                          "Idempotency key was already used for a different withdrawal"));
+                    }
+                    ctx.existing = raced;
+                    return Future.succeededFuture(ctx);
+                      });
+                    });
+                });
+              });
+        })
+        .compose(ctx -> {
+          if (ctx.existing != null) {
+            return Future.succeededFuture(ctx);
+          }
+          span.addEvent("saldo_debit_start");
+          return repoSaldo.updateSaldoDelta(req.getCardNumber(), -req.getWithdrawAmount())
+              .map(v -> ctx)
+              .recover(err -> markWithdrawFailedAndFail(ctx.withdraw, err));
+        })
+        .compose(ctx -> {
+          if (ctx.existing != null) {
+            return Future.succeededFuture(ctx);
+          }
+          return repo.updateWithdrawStatus(UpdateWithdrawStatus.builder()
+                  .withdrawId(ctx.withdraw.getId()).status("success").build())
+              .map(updated -> {
+                if (updated == null) {
+                  throw new IllegalStateException("Withdrawal status update returned no row");
+                }
+                ctx.withdraw = updated;
+                return ctx;
+              })
+              .recover(err -> compensateWithdrawAndFail(ctx, err));
+        })
+        .compose(ctx -> invalidateCache(ctx.existing != null ? ctx.existing.getId() : ctx.withdraw.getId())
+            .map(v -> ctx))
+        .compose(ctx -> {
+          if (ctx.existing != null) {
+            return Future.succeededFuture(ctx);
+          }
+          return sendWithdrawEmail(ctx.card.getEmail(), req.getWithdrawAmount(), ctx.withdraw.getId(), "create")
+              .map(v -> ctx);
+        })
+        .map(ctx -> WithdrawResponse.from(ctx.existing != null ? ctx.existing : ctx.withdraw))
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingCtx, "create", "Withdrawal created successfully"))
         .onFailure(err -> {
           logger.error("Failed to create withdrawal for card: {}", req.getCardNumber(), err);
           tracingMetrics.completeSpanError(tracingCtx, "create", err.getMessage());
         });
+  }
+
+  private long configuredDailyLimit() {
+    String value = System.getenv("WITHDRAW_DAILY_LIMIT");
+    if (value == null || value.isBlank()) {
+      return DEFAULT_DAILY_WITHDRAW_LIMIT;
+    }
+    try {
+      return Math.max(1, Long.parseLong(value));
+    } catch (NumberFormatException e) {
+      logger.warn("Invalid WITHDRAW_DAILY_LIMIT; using default", e);
+      return DEFAULT_DAILY_WITHDRAW_LIMIT;
+    }
+  }
+
+  private boolean matchesIdempotentRequest(Withdraw existing, CreateWithdrawRequest req) {
+    return Objects.equals(existing.getCardNumber(), req.getCardNumber())
+        && Objects.equals(existing.getWithdrawAmount(), (long) req.getWithdrawAmount());
+  }
+
+  private Future<WithdrawCreateContext> markWithdrawFailedAndFail(Withdraw withdraw, Throwable err) {
+    return repo.updateWithdrawStatus(UpdateWithdrawStatus.builder()
+            .withdrawId(withdraw.getId()).status("failed").build())
+        .recover(statusErr -> {
+          logger.error("Failed to mark withdrawal {} as failed", withdraw.getId(), statusErr);
+          return Future.succeededFuture(withdraw);
+        })
+        .compose(ignored -> Future.<WithdrawCreateContext>failedFuture(err));
+  }
+
+  private Future<WithdrawCreateContext> compensateWithdrawAndFail(WithdrawCreateContext ctx, Throwable err) {
+    return repoSaldo.updateSaldoDelta(ctx.withdraw.getCardNumber(), ctx.withdraw.getWithdrawAmount().intValue())
+        .recover(compensationErr -> {
+          logger.error("Failed to compensate withdrawal {}", ctx.withdraw.getId(), compensationErr);
+          return Future.succeededFuture();
+        })
+        .compose(v -> repo.updateWithdrawStatus(UpdateWithdrawStatus.builder()
+                .withdrawId(ctx.withdraw.getId()).status("failed").build())
+            .recover(statusErr -> Future.succeededFuture(ctx.withdraw))
+            .compose(ignored -> Future.<WithdrawCreateContext>failedFuture(err)));
+  }
+
+  private static class WithdrawCreateContext {
+    Withdraw existing;
+    Withdraw withdraw;
+    final pb.card.Card.CardWithEmailResponse card;
+
+    WithdrawCreateContext(pb.card.Card.CardWithEmailResponse card, Withdraw existing) {
+      this.card = card;
+      this.existing = existing;
+    }
   }
 
   @Override
@@ -135,63 +227,39 @@ public class WithdrawCommandServiceImpl implements WithdrawCommandService {
                 new NotFoundException("Withdrawal not found with id: " + req.getWithdrawId()));
           }
 
-          int diff = req.getWithdrawAmount() - existing.getWithdrawAmount().intValue();
-
-          return repoSaldo.getSaldoByCardNumber(req.getCardNumber())
-              .<WithdrawResponse>compose(saldoResp -> {
-                int currentBalance = saldoResp.getData().getTotalBalance();
-                int newBalance = currentBalance - diff;
-
-                if (newBalance < 0) {
-                  // ✅ FIX 5: Gunakan domain request builder untuk status failed
-                  var failedStatusReq = UpdateWithdrawStatus.builder()
-                      .withdrawId(req.getWithdrawId())
-                      .status("failed")
-                      .build();
-                  return repo.updateWithdrawStatus(failedStatusReq)
-                      .compose(v -> Future.<WithdrawResponse>failedFuture(
-                          new InsufficientBalanceException(currentBalance,
-                              req.getWithdrawAmount())));
-                }
-
-                // ✅ FIX 6: Gunakan domain request builder untuk update saldo
-                var saldoReq = UpdateSaldoBalance.builder()
-                    .cardNumber(req.getCardNumber())
-                    .totalBalance(newBalance)
-                    .build();
-
-                return repoSaldo.updateSaldoBalance(saldoReq)
-                    .compose(v -> repo.updateWithdraw(req)) // Sesuai snippet repo yang terima UpdateWithdrawRequest
-                    .compose(updated -> {
-                      // ✅ FIX 7: Gunakan domain request builder untuk status success
-                      var statusReq = UpdateWithdrawStatus.builder()
-                          .withdrawId(updated.getId())
-                          .status("success")
-                          .build();
-                      return repo.updateWithdrawStatus(statusReq);
-                    })
-                    .compose(updated -> invalidateCache(updated.getId())
-                        .<Withdraw>map(v -> updated)) // ✅ FIX 8: Type witness <Withdraw>
-                    .compose(updated -> repoCard.findUserCardByCardNumber(req.getCardNumber())
-                        .compose(cardResp -> sendWithdrawEmail(
-                            cardResp.getEmail(), req.getWithdrawAmount(),
-                            updated.getId(), "update")
-                            .<Withdraw>map(v -> updated))) // ✅ FIX 8: Type witness <Withdraw>
-                    .map(updated -> {
-                      tracingMetrics.completeSpanSuccess(tracingCtx, "update",
-                          "Withdrawal updated successfully");
-                      return WithdrawResponse.from(updated);
-                    })
-                    .recover(err -> {
-                      logger.error("Rolling back balance for withdraw update", err);
-                      var rollbackReq = UpdateSaldoBalance.builder()
-                          .cardNumber(req.getCardNumber())
-                          .totalBalance(currentBalance)
-                          .build();
-                      return repoSaldo.updateSaldoBalance(rollbackReq)
-                          .compose(rv -> Future.<WithdrawResponse>failedFuture(err));
-                    });
-              });
+          int saldoDelta = existing.getWithdrawAmount().intValue() - req.getWithdrawAmount();
+          // Positive delta restores funds when the withdrawal is reduced; negative
+          // delta debits only the difference when the withdrawal is increased.
+          return repoSaldo.updateSaldoDelta(req.getCardNumber(), saldoDelta)
+              .compose(debitResult -> repo.updateWithdraw(req, configuredDailyLimit())
+                  .compose(updated -> {
+                    if (updated == null) {
+                      return Future.<Withdraw>failedFuture(new NotFoundException(
+                          "Withdrawal not found with id: " + req.getWithdrawId()));
+                    }
+                    return repo.updateWithdrawStatus(UpdateWithdrawStatus.builder()
+                            .withdrawId(updated.getId()).status("success").build())
+                        .map(statusUpdated -> statusUpdated != null ? statusUpdated : updated);
+                  })
+                  .compose(updated -> invalidateCache(updated.getId()).<Withdraw>map(v -> updated))
+                  .compose(updated -> repoCard.findUserCardByCardNumber(req.getCardNumber())
+                      .compose(cardResp -> sendWithdrawEmail(
+                          cardResp.getEmail(), req.getWithdrawAmount(), updated.getId(), "update")
+                          .<Withdraw>map(v -> updated)))
+                  .map(updated -> {
+                    tracingMetrics.completeSpanSuccess(tracingCtx, "update",
+                        "Withdrawal updated successfully");
+                    return WithdrawResponse.from(updated);
+                  })
+                  .recover(err -> {
+                    logger.error("Rolling back balance for withdraw update", err);
+                    return repoSaldo.updateSaldoDelta(req.getCardNumber(), -saldoDelta)
+                        .recover(compensationErr -> {
+                          logger.error("Failed to compensate withdraw update {}", req.getWithdrawId(), compensationErr);
+                          return Future.succeededFuture();
+                        })
+                        .compose(ignored -> Future.<WithdrawResponse>failedFuture(err));
+                  }));
         })
         .onFailure(err -> {
           logger.error("Failed to update withdrawal: {}", req.getWithdrawId(), err);

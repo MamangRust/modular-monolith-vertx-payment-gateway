@@ -23,6 +23,7 @@ public class Transaction {
   private String paymentMethod;
   private Integer merchantId;
   private String status;
+  private String idempotencyKey;
 
   private OffsetDateTime transactionTime;
   private OffsetDateTime createdAt;
@@ -37,7 +38,8 @@ public class Transaction {
         .put("amount", amount)
         .put("payment_method", paymentMethod)
         .put("merchant_id", merchantId)
-        .put("status", status);
+        .put("status", status)
+        .put("idempotency_key", idempotencyKey);
 
     if (transactionTime != null) json.put("transaction_time", transactionTime.toString());
     if (createdAt != null) json.put("created_at", createdAt.toString());
@@ -58,6 +60,7 @@ public class Transaction {
         .paymentMethod(json.getString("payment_method"))
         .merchantId(json.getInteger("merchant_id"))
         .status(json.getString("status"))
+        .idempotencyKey(json.getString("idempotency_key"))
         .transactionTime(parseTime(json.getString("transaction_time")))
         .createdAt(parseTime(json.getString("created_at")))
         .updatedAt(parseTime(json.getString("updated_at")))
@@ -81,6 +84,7 @@ public class Transaction {
         .paymentMethod(row.getString("payment_method"))
         .merchantId(row.getInteger("merchant_id"))
         .status(row.getString("status"))
+        .idempotencyKey(row.getString("idempotency_key"))
         .transactionTime(toOffsetDateTime(row, "transaction_time"))
         .createdAt(toOffsetDateTime(row, "created_at"))
         .updatedAt(toOffsetDateTime(row, "updated_at"))

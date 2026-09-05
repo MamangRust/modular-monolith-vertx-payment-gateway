@@ -20,7 +20,10 @@ public final class ApiKeyMiddleware {
       var req = Merchant.FindByApiKeyRequest.newBuilder().setApiKey(apiKey).build();
       merchantClient.findByApiKey(req)
           .onSuccess(resp -> {
-            if ("200".equals(resp.getStatus()) && resp.hasData()) {
+            // Merchant query handlers reply with status "success" (not "200");
+            // hasData() is the reliable signal that the key resolved.
+            if (resp.hasData()
+                && ("200".equals(resp.getStatus()) || "success".equals(resp.getStatus()))) {
               ctx.put("apiKey", apiKey);
               ctx.put("merchant", resp.getData());
               ctx.next();

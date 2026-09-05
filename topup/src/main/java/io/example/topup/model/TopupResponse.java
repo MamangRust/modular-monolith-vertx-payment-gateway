@@ -24,6 +24,7 @@ public class TopupResponse {
         .id(t.getId())
         .cardNumber(t.getCardNumber())
         .amount(t.getTopupAmount().intValue())
+        .status(t.getStatus())
         .createdAt(t.getCreatedAt() != null ? t.getCreatedAt().toInstant().toString() : "")
         .updatedAt(t.getUpdatedAt() != null ? t.getUpdatedAt().toInstant().toString() : "")
         .build();

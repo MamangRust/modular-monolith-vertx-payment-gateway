@@ -96,6 +96,19 @@ public class WithdrawQueryRepositoryImpl implements WithdrawQueryRepository {
   }
 
   @Override
+  public Future<Long> getTodaySuccessfulAmount(String card) {
+    String sql = """
+        SELECT COALESCE(SUM(withdraw_amount), 0) AS total_amount
+        FROM withdraws
+        WHERE card_number = $1 AND status = 'success' AND deleted_at IS NULL
+          AND withdraw_time >= CURRENT_DATE
+          AND withdraw_time < CURRENT_DATE + INTERVAL '1 day'
+        """;
+    return pool.preparedQuery(sql).execute(Tuple.of(card))
+        .map(rows -> rows.iterator().hasNext() ? rows.iterator().next().getLong("total_amount") : 0L);
+  }
+
+  @Override
   public Future<List<Withdraw>> getWithdrawsByCardNumberPrimitive(String card) {
     String sql = "SELECT * FROM withdraws WHERE deleted_at IS NULL AND card_number = $1 ORDER BY withdraw_time DESC";
     return pool.preparedQuery(sql).execute(Tuple.of(card)).map(this::mapList);

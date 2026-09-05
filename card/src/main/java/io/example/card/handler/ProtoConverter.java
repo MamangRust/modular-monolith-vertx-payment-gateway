@@ -65,13 +65,15 @@ public class ProtoConverter {
         .build();
   }
 
-  public static String formatExpDate(com.google.protobuf.Timestamp protoTs) {
+  // The cards.expire_date column is a DATE. Returning a LocalDate lets the
+  // pg client encode it natively (a String would fail to coerce to LocalDate).
+  public static java.time.LocalDate formatExpDate(com.google.protobuf.Timestamp protoTs) {
     if (protoTs == null || (protoTs.getSeconds() == 0 && protoTs.getNanos() == 0)) {
-      return Instant.now().toString().split("T")[0];
+      return java.time.LocalDate.now();
     }
     return Instant.ofEpochSecond(protoTs.getSeconds(), protoTs.getNanos())
         .atZone(java.time.ZoneOffset.UTC)
-        .format(DateTimeFormatter.ISO_LOCAL_DATE);
+        .toLocalDate();
   }
 
   public static pb.card.Card.CardResponse fromResponse(CardResponse cr) {

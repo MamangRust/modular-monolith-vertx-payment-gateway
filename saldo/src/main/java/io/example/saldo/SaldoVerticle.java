@@ -8,6 +8,7 @@ import io.example.common.chaos.ChaosKafkaInterceptor;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -61,6 +62,7 @@ public class SaldoVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(SaldoVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
   private io.vertx.grpc.client.GrpcClient cardGrpcClient;
   private KafkaService kafkaService;
   private KafkaConsumer<String, JsonObject> kafkaConsumer;
@@ -77,9 +79,9 @@ public class SaldoVerticle extends AbstractVerticle {
             .put("user", "DRAGON")
             .put("password", "DRAGON")
             .put("pool_size", 5))
-        .put("grpc_port", 8084)
-        .put("card_service_host", "localhost")
-        .put("card_service_port", 8082)
+        .put("grpc_port", 50056)
+        .put("card_service_host", "card")
+        .put("card_service_port", 50053)
         .put("service.name", "saldo-service");
 
     DeploymentOptions options = new DeploymentOptions().setConfig(config);
@@ -87,7 +89,7 @@ public class SaldoVerticle extends AbstractVerticle {
     vertx.deployVerticle(new SaldoVerticle(), options)
         .onSuccess(id -> {
           log.info("✅ Saldo Service successfully deployed! ID: {}", id);
-          log.info("🚀 gRPC Server running on port 8084");
+          log.info("🚀 gRPC Server running on port 50056");
         })
         .onFailure(err -> {
           log.error("❌ Failed to deploy SaldoVerticle", err);
@@ -116,7 +118,10 @@ public class SaldoVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -133,8 +138,14 @@ public class SaldoVerticle extends AbstractVerticle {
     SaldoStatsBalanceRepository statsBalRepo = new SaldoStatsBalanceRepositoryImpl(chaosPool);
 
     // 3. Initialize gRPC Client for Card Service
-    String cardHost = rawConfig.getString("card_service_host", "localhost");
-    int cardPort = rawConfig.getInteger("card_service_port", 8082);
+    // Env wins over config: the legacy defaults (localhost:8082) pointed nowhere in
+    // Docker/K8s, where the card service is reachable at card:50053.
+    String cardHost = System.getenv().getOrDefault("CARD_SERVICE_HOST",
+        rawConfig.getString("card_service_host", "card"));
+    int cardPort = Integer.parseInt(
+        System.getenv().getOrDefault("CARD_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_CARD_PORT",
+                String.valueOf(rawConfig.getInteger("card_service_port", 50053)))));
     this.cardGrpcClient = GrpcClient.client(vertx);
     var cardStub = new VertxCardQueryServiceGrpcClient(cardGrpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(cardPort, cardHost));
@@ -221,7 +232,10 @@ public class SaldoVerticle extends AbstractVerticle {
                   x -> log.info("📡 Saldo Service successfully subscribed to topic: saldo-service-topic-create-saldo"))
               .mapEmpty();
         })
-        .onSuccess(v -> startPromise.complete())
+        .onSuccess(v -> {
+          grpcHealthService.setServing(true);
+          startPromise.complete();
+        })
         .onFailure(err -> {
           log.error("❌ Failed to start SaldoVerticle", err);
           startPromise.fail(err);
@@ -230,6 +244,9 @@ public class SaldoVerticle extends AbstractVerticle {
 
   @Override
   public void stop(Promise<Void> stopPromise) {
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
+    }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
     }
@@ -261,6 +278,7 @@ public class SaldoVerticle extends AbstractVerticle {
     Handler<HttpServerRequest> chaosHandler =
         new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
 
+    grpcHealthService = new GrpcHealthService("saldo").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(chaosHandler)
         .listen(grpcPort)

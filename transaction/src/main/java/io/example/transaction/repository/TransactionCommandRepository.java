@@ -8,6 +8,8 @@ import pb.transaction.TransactionCommand.UpdateTransactionRequest;
 public interface TransactionCommandRepository {
   Future<Transaction> createTransaction(CreateTransactionRequest req);
 
+  Future<Transaction> findByIdempotencyKey(String idempotencyKey);
+
   Future<Transaction> updateTransaction(UpdateTransactionRequest req);
 
   Future<Transaction> updateTransactionStatus(Integer id, String status);

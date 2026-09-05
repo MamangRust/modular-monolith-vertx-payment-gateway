@@ -3,6 +3,7 @@ package io.example.user;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
 import io.example.common.observability.TracingMetrics;
@@ -36,6 +37,7 @@ public class UserVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(UserVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
 
   public static void main(String[] args) {
     Vertx vertx = Vertx.vertx();
@@ -85,7 +87,10 @@ public class UserVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -117,6 +122,7 @@ public class UserVerticle extends AbstractVerticle {
     startGrpcServer(queryHandler, cmdHandler, port)
         .onSuccess(v -> {
           log.info("UserVerticle fully initialized with CQRS. Listening for gRPC on port {}", port);
+          grpcHealthService.setServing(true);
           startPromise.complete();
         })
         .onFailure(err -> {
@@ -127,6 +133,9 @@ public class UserVerticle extends AbstractVerticle {
 
   @Override
   public void stop(Promise<Void> stopPromise) {
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
+    }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
     }
@@ -139,6 +148,7 @@ public class UserVerticle extends AbstractVerticle {
     queryHandler.bindAll(grpcServer);
     cmdHandler.bindAll(grpcServer);
 
+    grpcHealthService = new GrpcHealthService("user").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(grpcServer)
         .listen(grpcPort)

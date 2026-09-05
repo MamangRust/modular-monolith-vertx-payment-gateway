@@ -17,21 +17,59 @@ public class ChaosManager {
   private static final Logger log = LoggerFactory.getLogger(ChaosManager.class);
 
   private static final String DEFAULT_CONFIG_PATH = "chaos.yaml";
+
+  /** Env var that gates every chaos interceptor. Absent or non-"true" means disabled. */
+  public static final String CHAOS_ENABLED_ENV = "CHAOS_ENABLED";
+
   private final String configPath;
+  private final boolean enabled;
   private volatile ChaosConfig currentConfig;
   private long lastModified = 0;
 
+  /**
+   * Whether chaos injection is enabled for this process.
+   *
+   * <p>Defaults to {@code false}: the wrappers are reflective proxies around the SQL pool,
+   * Kafka producer and gRPC client, so they must not be installed in production unless
+   * explicitly asked for. Set {@code CHAOS_ENABLED=true} in staging/chaos-testing only.
+   */
+  public static boolean isChaosEnabled() {
+    return isChaosEnabled(System.getenv());
+  }
+
+  /** Testable overload: same rules, explicit env map. */
+  static boolean isChaosEnabled(java.util.Map<String, String> env) {
+    String value = env.get(CHAOS_ENABLED_ENV);
+    return value != null && Boolean.parseBoolean(value.trim());
+  }
+
   public ChaosManager() {
-    this(System.getenv().getOrDefault("CHAOS_CONFIG_PATH", DEFAULT_CONFIG_PATH));
+    this(System.getenv().getOrDefault("CHAOS_CONFIG_PATH", DEFAULT_CONFIG_PATH), isChaosEnabled());
   }
 
   public ChaosManager(String configPath) {
+    this(configPath, isChaosEnabled());
+  }
+
+  /** Testable constructor that enables deterministic chaos without process environment mutation. */
+  ChaosManager(String configPath, boolean enabled) {
     this.configPath = configPath;
+    this.enabled = enabled;
     this.currentConfig = new ChaosConfig();
-    loadConfig();
+    if (enabled) {
+      loadConfig();
+    } else {
+      log.info("🧯 Chaos disabled ({} is not \"true\"); skipping config load from {}",
+          CHAOS_ENABLED_ENV, configPath);
+    }
   }
 
   public void startWatcher(Vertx vertx) {
+    if (!enabled) {
+      // No periodic timer when chaos is off: an operator dropping a chaos.yaml on the pod
+      // must not silently arm fault injection in production.
+      return;
+    }
     // Check for file modification every 5 seconds
     vertx.setPeriodic(5000, id -> {
       File file = new File(configPath);
@@ -114,6 +152,10 @@ public class ChaosManager {
     } catch (Exception e) {
       return target.contains(pattern);
     }
+  }
+
+  public boolean isEnabled() {
+    return enabled;
   }
 
   public void halt() {

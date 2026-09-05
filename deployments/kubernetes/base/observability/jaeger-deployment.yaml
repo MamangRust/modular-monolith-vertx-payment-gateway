@@ -29,3 +29,5 @@ spec:
         ports:
         - containerPort: 16686
         - containerPort: 14250
+        - containerPort: 4317
+          name: otlp-grpc

@@ -4,7 +4,7 @@ import io.example.common.exception.api.NotFoundException;
 import io.vertx.core.Future;
 import lombok.RequiredArgsConstructor;
 import pb.saldo.Saldo.ApiResponseSaldo;
-import pb.saldo.SaldoCommand.UpdateSaldoBalanceRequest;
+import pb.saldo.SaldoCommand.UpdateSaldoDeltaRequest;
 import pb.saldo.VertxSaldoCommandServiceGrpcClient;
 import pb.saldo.VertxSaldoQueryServiceGrpcClient;
 
@@ -24,10 +24,14 @@ public class SaldoClientRepository {
         });
   }
 
-  public Future<ApiResponseSaldo> updateSaldoBalance(String cardNumber, int newBalance) {
-    return commandStub.updateSaldoBalance(UpdateSaldoBalanceRequest.newBuilder()
+  /**
+   * Atomically applies a delta to the card balance via the saldo service.
+   * Positive delta credits, negative delta debits (guarded, never negative).
+   */
+  public Future<ApiResponseSaldo> updateSaldoDelta(String cardNumber, int delta) {
+    return commandStub.updateSaldoDelta(UpdateSaldoDeltaRequest.newBuilder()
         .setCardNumber(cardNumber)
-        .setTotalBalance(newBalance)
+        .setDelta(delta)
         .build())
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {

@@ -21,6 +21,7 @@ public class Transfer {
   private String transferFrom;
   private String transferTo;
   private Long transferAmount;
+  private String idempotencyKey;
   private String status;
   
   private OffsetDateTime transferTime;
@@ -77,6 +78,7 @@ public class Transfer {
         .transferFrom(row.getString("transfer_from"))
         .transferTo(row.getString("transfer_to"))
         .transferAmount(row.getLong("transfer_amount"))
+        .idempotencyKey(row.getString("idempotency_key"))
         .status(row.getString("status"))
         .transferTime(toOffsetDateTime(row, "transfer_time"))
         .createdAt(toOffsetDateTime(row, "created_at"))

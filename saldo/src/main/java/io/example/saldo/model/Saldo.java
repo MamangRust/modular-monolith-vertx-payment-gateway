@@ -4,6 +4,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.NoSuchElementException;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Row;
@@ -60,7 +61,10 @@ public class Saldo {
   public static Saldo fromRow(Row row) {
     if (row == null) return null;
 
-    Integer id = row.getInteger("id");
+    // PK column in the "saldos" table is "saldo_id" (see V8 migration).
+    // Read it first; fall back to "id" only when a query aliases saldo_id AS id.
+    // Row.getInteger throws NoSuchElementException for a missing column, not null.
+    Integer id = readId(row);
     String cardNumber = row.getString("card_number");
     Long totalBalance = row.getLong("total_balance");
     Long withdrawAmount = row.getLong("withdraw_amount");
@@ -99,6 +103,22 @@ public class Saldo {
         .updatedAt(updatedAt)
         .deletedAt(deletedAt)
         .build();
+  }
+
+  static Integer readId(Row row) {
+    try {
+      Integer id = row.getInteger("saldo_id");
+      if (id != null) {
+        return id;
+      }
+    } catch (NoSuchElementException ignored) {
+      // query aliased saldo_id AS id
+    }
+    try {
+      return row.getInteger("id");
+    } catch (NoSuchElementException ignored) {
+      return null;
+    }
   }
 
   private static Timestamp parseTimestamp(JsonObject json, String field) {

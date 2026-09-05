@@ -18,10 +18,22 @@ public class AuthProxyHandler {
         .setLastname(GrpcGatewayUtils.getJsonString(body, "lastname", ""))
         .setEmail(GrpcGatewayUtils.getJsonString(body, "email", ""))
         .setPassword(GrpcGatewayUtils.getJsonString(body, "password", ""))
+        .setConfirmPassword(GrpcGatewayUtils.getJsonString(body, "confirm_password", ""))
         .build();
 
     client.registerUser(req)
         .onSuccess(resp -> GrpcGatewayUtils.sendResponse(ctx, resp, 201))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void verifyCode(RoutingContext ctx) {
+    JsonObject body = ctx.body().asJsonObject();
+    var req = Auth.VerifyCodeRequest.newBuilder()
+        .setCode(GrpcGatewayUtils.getJsonString(body, "code", ""))
+        .build();
+
+    client.verifyCode(req)
+        .onSuccess(resp -> GrpcGatewayUtils.sendResponse(ctx, resp, 200))
         .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
   }
 

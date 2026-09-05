@@ -12,6 +12,7 @@ message CreateWithdrawRequest {
   string card_number = 1;
   int32 withdraw_amount = 2;
   google.protobuf.Timestamp withdraw_time = 3;
+  string idempotency_key = 4;
 }
 
 message UpdateWithdrawRequest {

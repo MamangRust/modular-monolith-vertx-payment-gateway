@@ -7,6 +7,8 @@ import io.example.common.chaos.ChaosHttpMiddleware;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.config.JwtConfig;
 import io.example.common.config.TelemetryConfig;
+import io.example.common.observability.TracingMetrics;
+import io.opentelemetry.api.OpenTelemetry;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Promise;
@@ -55,7 +57,8 @@ public class ApiGatewayVerticle extends AbstractVerticle {
       telConfig.put("service.name", "api-gateway");
     }
     telemetryConfig = new TelemetryConfig(telConfig);
-    telemetryConfig.initialize();
+    OpenTelemetry openTelemetry = telemetryConfig.initialize();
+    TracingMetrics tracingMetrics = new TracingMetrics(openTelemetry, "api-gateway");
 
     // 2. Instantiate unified gRPC Client pool (wrapped with chaos interceptor)
     grpcClient = GrpcClient.client(vertx);
@@ -63,17 +66,20 @@ public class ApiGatewayVerticle extends AbstractVerticle {
     chaosManager.startWatcher(vertx);
     grpcClient = ChaosGrpcClientInterceptor.wrap(grpcClient, chaosManager, vertx);
 
-    // 3. Define all SocketAddresses for backend microservices using environment variables
-    SocketAddress addrUser = resolveGrpcAddress("USER", "user", 8083);
-    SocketAddress addrAuth = SocketAddress.inetSocketAddress(8083, "auth"); // Special case for auth as it might be used differently
-    SocketAddress addrRole = resolveGrpcAddress("ROLE", "role", 8083);
-    SocketAddress addrSaldo = resolveGrpcAddress("SALDO", "saldo", 8083);
-    SocketAddress addrCard = resolveGrpcAddress("CARD", "card", 8083);
-    SocketAddress addrMerchant = resolveGrpcAddress("MERCHANT", "merchant", 8083);
-    SocketAddress addrTopup = resolveGrpcAddress("TOPUP", "topup", 8083);
-    SocketAddress addrTransfer = resolveGrpcAddress("TRANSFER", "transfer", 8083);
-    SocketAddress addrWithdraw = resolveGrpcAddress("WITHDRAW", "withdraw", 8083);
-    SocketAddress addrTransaction = resolveGrpcAddress("TRANSACTION", "transaction", 8083);
+    // 3. Define all SocketAddresses for backend microservices using environment variables.
+    // Defaults mirror the canonical gRPC port per service (K8s Service targetPort and
+    // GRPC_*_PORT in docker.env). Previously every call defaulted to 8083, so a missing
+    // GRPC_*_ADDR entry silently pointed nine services at the same wrong port.
+    SocketAddress addrAuth = resolveGrpcAddress("AUTH", "auth", 50051);
+    SocketAddress addrRole = resolveGrpcAddress("ROLE", "role", 50052);
+    SocketAddress addrCard = resolveGrpcAddress("CARD", "card", 50053);
+    SocketAddress addrMerchant = resolveGrpcAddress("MERCHANT", "merchant", 50054);
+    SocketAddress addrUser = resolveGrpcAddress("USER", "user", 50055);
+    SocketAddress addrSaldo = resolveGrpcAddress("SALDO", "saldo", 50056);
+    SocketAddress addrTopup = resolveGrpcAddress("TOPUP", "topup", 50057);
+    SocketAddress addrTransaction = resolveGrpcAddress("TRANSACTION", "transaction", 50058);
+    SocketAddress addrTransfer = resolveGrpcAddress("TRANSFER", "transfer", 50059);
+    SocketAddress addrWithdraw = resolveGrpcAddress("WITHDRAW", "withdraw", 50060);
 
     // 4. Instantiate client stubs pointing to target address channels
     // User
@@ -147,7 +153,11 @@ public class ApiGatewayVerticle extends AbstractVerticle {
     var userHandler = new UserProxyHandler(userQuery, userCmd);
     var roleHandler = new RoleProxyHandler(roleQuery, roleCmd);
     var saldoHandler = new SaldoProxyHandler(saldoQuery, saldoCmd, saldoStatsBal, saldoStatsTot);
-    var cardHandler = new CardProxyHandler(cardQuery, cardCmd, cardDash, cardStatsBal, cardStatsTop, cardStatsWit, cardStatsTxn, cardStatsTrf);
+    var cardHandler = new CardProxyHandler(cardQuery, cardCmd, cardDash, cardStatsBal, cardStatsTop, cardStatsWit, cardStatsTxn, cardStatsTrf,
+        new pb.card.VertxCardAuthorizationServiceGrpcClient(grpcClient, addrCard),
+        new pb.card.VertxCardPaymentServiceGrpcClient(grpcClient, addrCard),
+        new pb.card.VertxCardBillingServiceGrpcClient(grpcClient, addrCard),
+        new pb.card.VertxCardLimitServiceGrpcClient(grpcClient, addrCard));
     var merchantHandler = new MerchantProxyHandler(
         merchantQuery, merchantCmd, merchantDocCmd, merchantDocQuery,
         merchantStatsAmt, merchantStatsMet, merchantStatsTot, merchantTxn);
@@ -175,7 +185,8 @@ public class ApiGatewayVerticle extends AbstractVerticle {
         transferHandler,
         withdrawHandler,
         txHandler,
-        chaosManager
+        chaosManager,
+        tracingMetrics
     );
 
     int port = rawConfig.getInteger("http_port", 8080);

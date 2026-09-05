@@ -3,6 +3,7 @@ package io.example.saldo.repository.impl;
 import io.example.saldo.domain.requests.CreateSaldoRequest;
 import io.example.saldo.domain.requests.UpdateSaldoRequest;
 import io.example.saldo.domain.requests.UpdateSaldoBalanceRequest;
+import io.example.saldo.domain.requests.UpdateSaldoDeltaRequest;
 import io.example.saldo.domain.requests.UpdateSaldoWithdrawRequest;
 import io.example.saldo.model.Saldo;
 import io.example.saldo.repository.SaldoCommandRepository;
@@ -37,10 +38,15 @@ public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
   @Override
   public Future<Saldo> updateSaldo(UpdateSaldoRequest req) {
     return client.preparedQuery("""
-        UPDATE saldos SET card_number = $2, total_balance = $3, updated_at = CURRENT_TIMESTAMP
+        UPDATE saldos
+        SET card_number = COALESCE(NULLIF($2, ''), card_number),
+            total_balance = COALESCE(NULLIF($3, 0), total_balance),
+            updated_at = CURRENT_TIMESTAMP
         WHERE saldo_id = $1 AND deleted_at IS NULL RETURNING *
         """)
-        .execute(Tuple.of(req.getSaldoId(), req.getCardNumber(), req.getTotalBalance()))
+        .execute(Tuple.of(req.getSaldoId(),
+            req.getCardNumber() != null ? req.getCardNumber() : "",
+            req.getTotalBalance()))
         .map(this::mapSingle);
   }
 
@@ -51,6 +57,18 @@ public class SaldoCommandRepositoryImpl implements SaldoCommandRepository {
         WHERE card_number = $1 AND deleted_at IS NULL RETURNING *
         """)
         .execute(Tuple.of(req.getCardNumber(), req.getTotalBalance()))
+        .map(this::mapSingle);
+  }
+
+  @Override
+  public Future<Saldo> updateSaldoDelta(UpdateSaldoDeltaRequest req) {
+    return client.preparedQuery("""
+        UPDATE saldos
+        SET total_balance = total_balance + $2, updated_at = CURRENT_TIMESTAMP
+        WHERE card_number = $1 AND deleted_at IS NULL AND total_balance + $2 >= 0
+        RETURNING *
+        """)
+        .execute(Tuple.of(req.getCardNumber(), req.getDelta()))
         .map(this::mapSingle);
   }
 

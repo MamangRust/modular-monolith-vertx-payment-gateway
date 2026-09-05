@@ -1,8 +1,8 @@
 global:
-  smtp_smarthost: 'smtp.ethereal.email:587'
-  smtp_from: 'jerrell.wiegand83@ethereal.email'
-  smtp_auth_username: 'jerrell.wiegand83@ethereal.email'
-  smtp_auth_password: 'SR2Bs6YbpmeeF7s8Vr'
+  smtp_smarthost: '${SMTP_SERVER}:${SMTP_PORT}'
+  smtp_from: '${SMTP_USER}'
+  smtp_auth_username: '${SMTP_USER}'
+  smtp_auth_password: '${SMTP_PASS}'
   smtp_require_tls: true
 
 route:

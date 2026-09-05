@@ -27,8 +27,12 @@ public class AppConfig {
   }
 
   public JsonObject getDatabaseConfig() {
-    JsonObject db = config.getJsonObject("database", new JsonObject());
-    
+    // Vert.x getJsonObject(key, default) returns null — not the default — when
+    // the key exists with a null value (e.g. worker configs that put a null
+    // database object). Fall back explicitly so the NPE can never happen.
+    Object rawDb = config.getValue("database");
+    JsonObject db = rawDb instanceof JsonObject jo ? jo : new JsonObject();
+
     String host = System.getenv().getOrDefault("DB_HOST", db.getString("host", "localhost"));
     int port = System.getenv("DB_PORT") != null ? Integer.parseInt(System.getenv("DB_PORT")) : db.getInteger("port", 5432);
     String database = System.getenv().getOrDefault("DB_NAME", db.getString("database", "vertxdb"));

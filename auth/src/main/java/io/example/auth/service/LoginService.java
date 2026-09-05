@@ -61,7 +61,7 @@ public class LoginService {
                                 });
                     }
 
-                    String accessToken = tokenService.createAccessToken(user.getUserId());
+                    String accessToken = tokenService.createAccessToken(user.getUserId(), user.getRoles());
                     String refreshToken = tokenService.createRefreshToken(user.getUserId());
 
                     redisService.delete(failedAttemptsKey);

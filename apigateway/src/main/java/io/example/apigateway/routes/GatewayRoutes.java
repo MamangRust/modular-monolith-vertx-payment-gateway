@@ -4,7 +4,9 @@ import io.example.apigateway.handler.*;
 import io.example.apigateway.middleware.ApiKeyMiddleware;
 import io.example.apigateway.middleware.JwtMiddleware;
 import io.example.apigateway.middleware.RoleMiddleware;
+import io.example.apigateway.utils.GrpcGatewayUtils;
 import io.example.common.chaos.ChaosManager;
+import io.example.common.observability.TracingMetrics;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -29,20 +31,60 @@ public final class GatewayRoutes {
       TransferProxyHandler transfer,
       WithdrawProxyHandler withdraw,
       TransactionProxyHandler transaction,
-      ChaosManager chaosManager) {
+      ChaosManager chaosManager,
+      TracingMetrics tracingMetrics) {
 
-    // 1. Global middleware (BodyParser is required for all JSON posts)
+    // 1. Global request metrics (registered first so every request is counted,
+    // including ones rejected by later middleware/routes). Mirrors the
+    // TracingMetrics usage in domain services: increments `requests_total` with
+    // method + status attributes and records `request_duration_seconds`.
+    router.route().handler(ctx -> {
+      TracingMetrics.TracingContext tc = tracingMetrics.startSpan("gateway.request");
+      ctx.response().endHandler(v -> {
+        int status = ctx.response().getStatusCode();
+        String path = ctx.request().path() != null ? ctx.request().path() : ctx.request().uri();
+        String method = ctx.request().method().name() + " " + path;
+        if (status >= 400) {
+          tracingMetrics.completeSpanError(tc, method, "HTTP " + status);
+        } else {
+          tracingMetrics.completeSpanSuccess(tc, method, "HTTP " + status);
+        }
+      });
+      ctx.next();
+    });
+
+    // 2. Global middleware (BodyParser is required for all JSON posts)
     router.route().handler(BodyHandler.create());
 
     // 2. Public / Health routes
     router.get("/health").handler(ctx -> ctx.response()
         .putHeader("Content-Type", "application/json")
-        .end("{\"status\":\"UP\",\"service\":\"gateway\"}"));
+        .end(new JsonObject()
+            .put("status", "UP")
+            .put("service", "gateway")
+            .encode()));
+
+    // Kubernetes liveness probe — lightweight check that the server is alive
+    router.get("/health/live").handler(ctx -> ctx.response()
+        .putHeader("Content-Type", "application/json")
+        .setStatusCode(200)
+        .end(new JsonObject()
+            .put("status", "alive")
+            .encode()));
+
+    // Kubernetes readiness probe — checks that the gateway can serve traffic
+    router.get("/health/ready").handler(ctx -> ctx.response()
+        .putHeader("Content-Type", "application/json")
+        .setStatusCode(200)
+        .end(new JsonObject()
+            .put("status", "ready")
+            .encode()));
 
     // =========================================================================
     // AUTH ROUTES (No API prefix in monolithic routes)
     // =========================================================================
     router.post("/register").handler(auth::register);
+    router.post("/verify-code").handler(auth::verifyCode);
     router.post("/login").handler(auth::login);
     router.post("/refresh-token").handler(auth::refreshToken);
     router.get("/me").handler(JwtMiddleware.jwt(jwtAuth)).handler(auth::getMe);
@@ -52,9 +94,9 @@ public final class GatewayRoutes {
     // USER ROUTES (JWT guarded, Admin only for list views)
     // =========================================================================
     router.route("/users*").handler(JwtMiddleware.jwt(jwtAuth));
-    router.get("/users/active").handler(RoleMiddleware.requireRole("ADMIN")).handler(user::findActive);
-    router.get("/users/trashed").handler(RoleMiddleware.requireRole("ADMIN")).handler(user::findTrashed);
-    router.get("/users").handler(RoleMiddleware.requireRole("ADMIN")).handler(user::findAll);
+    router.get("/users/active").handler(RoleMiddleware.requireRole("ROLE_ADMIN")).handler(user::findActive);
+    router.get("/users/trashed").handler(RoleMiddleware.requireRole("ROLE_ADMIN")).handler(user::findTrashed);
+    router.get("/users").handler(RoleMiddleware.requireRole("ROLE_ADMIN")).handler(user::findAll);
     router.get("/users/:id").handler(user::findById);
     router.post("/users/update/:id").handler(user::update);
     router.post("/users/restore/:id").handler(user::restore);
@@ -67,9 +109,9 @@ public final class GatewayRoutes {
     // ROLE ROUTES (JWT guarded, Admin restricted)
     // =========================================================================
     router.route("/roles*").handler(JwtMiddleware.jwt(jwtAuth));
-    router.get("/roles/active").handler(RoleMiddleware.requireRole("ADMIN")).handler(role::findActive);
-    router.get("/roles/trashed").handler(RoleMiddleware.requireRole("ADMIN")).handler(role::findTrashed);
-    router.get("/roles").handler(RoleMiddleware.requireRole("ADMIN")).handler(role::findAll);
+    router.get("/roles/active").handler(RoleMiddleware.requireRole("ROLE_ADMIN")).handler(role::findActive);
+    router.get("/roles/trashed").handler(RoleMiddleware.requireRole("ROLE_ADMIN")).handler(role::findTrashed);
+    router.get("/roles").handler(RoleMiddleware.requireRole("ROLE_ADMIN")).handler(role::findAll);
     router.get("/roles/:id").handler(role::findById);
     router.post("/roles").handler(role::create);
     router.post("/roles/:id").handler(role::update);
@@ -106,7 +148,6 @@ public final class GatewayRoutes {
     router.get("/api/card").handler(card::getAllCards);
     router.get("/api/card/active").handler(card::getActiveCards);
     router.get("/api/card/trashed").handler(card::getTrashedCards);
-    router.get("/api/card/:cardId").handler(card::getCardById);
     router.post("/api/card/create").handler(card::createCard);
     router.post("/api/card/update/:cardId").handler(card::updateCard);
     router.post("/api/card/trashed/:cardId").handler(card::trashCard);
@@ -143,6 +184,25 @@ public final class GatewayRoutes {
     router.get("/api/card/yearly-transfer-sender-amount-by-card").handler(card::getYearlyTransferAmountBySender);
     router.get("/api/card/monthly-transfer-receiver-amount-by-card").handler(card::getMonthlyTransferAmountByReceiver);
     router.get("/api/card/yearly-transfer-receiver-amount-by-card").handler(card::getYearlyTransferAmountByReceiver);
+    // KEEP AFTER the stats literal routes above: a Vert.x `:param` matches a single
+    // path segment, so registering `:cardId` first would swallow /api/card/dashboard,
+    // /api/card/monthly-balance, etc. as cardId="dashboard" -> 400. (regression guard)
+    router.get("/api/card/:cardId").handler(card::getCardById);
+
+    // =========================================================================
+    // CREDIT CARD LIFECYCLE ROUTES (/api/v1/cards* prefix)
+    // =========================================================================
+    router.route("/api/v1/cards*").handler(JwtMiddleware.jwt(jwtAuth));
+    router.post("/api/v1/cards/authorize").handler(card::handleAuthorize);
+    router.post("/api/v1/cards/reverse").handler(card::handleReversal);
+    router.post("/api/v1/cards/payment").handler(card::handlePostPayment);
+    router.get("/api/v1/cards/:cardNumber/statement").handler(card::handleGetStatement);
+    router.get("/api/v1/cards/:cardNumber/statements").handler(card::handleGetStatements);
+    router.post("/api/v1/cards/billing/trigger").handler(card::handleTriggerBilling);
+    router.get("/api/v1/cards/:cardNumber/payments").handler(card::handlePaymentHistory);
+    router.get("/api/v1/cards/:cardNumber/limit").handler(card::handleGetLimit);
+    router.post("/api/v1/cards/:cardNumber/limit").handler(card::handleSetLimit);
+    router.get("/api/v1/cards/:cardNumber/rewards").handler(card::handleGetRewards);
 
     // =========================================================================
     // MERCHANT ROUTES (/api/merchants* prefix)
@@ -151,7 +211,6 @@ public final class GatewayRoutes {
     router.get("/api/merchants").handler(merchant::getAllMerchants);
     router.get("/api/merchants/active").handler(merchant::getActiveMerchants);
     router.get("/api/merchants/trashed").handler(merchant::getTrashedMerchants);
-    router.get("/api/merchants/:merchantId").handler(merchant::getMerchantById);
     router.get("/api/merchants/api-key/:apiKey").handler(merchant::getMerchantByApiKey);
     router.get("/api/merchants/by-name").handler(merchant::getMerchantByName);
     router.get("/api/merchants/by-user/:userId").handler(merchant::getMerchantsByUserId);
@@ -187,6 +246,8 @@ public final class GatewayRoutes {
     router.get("/api/merchants/yearly-amount-by-apikey/:apiKey").handler(merchant::getYearlyAmountByApiKey);
     router.get("/api/merchants/monthly-totalamount-by-apikey/:apiKey").handler(merchant::getMonthlyTotalAmountByApiKey);
     router.get("/api/merchants/yearly-totalamount-by-apikey/:apiKey").handler(merchant::getYearlyTotalAmountByApiKey);
+    // KEEP AFTER the analytics literal routes (see :cardId guard above)
+    router.get("/api/merchants/:merchantId").handler(merchant::getMerchantById);
 
     // =========================================================================
     // MERCHANT DOCUMENTS (/api/merchant-documents* prefix)
@@ -212,11 +273,12 @@ public final class GatewayRoutes {
     router.get("/api/topups").handler(topup::getTopups);
     router.get("/api/topups/active").handler(topup::getActiveTopups);
     router.get("/api/topups/trashed").handler(topup::getTrashedTopups);
-    router.get("/api/topups/:topupId").handler(topup::getTopupById);
     router.post("/api/topups/create").handler(topup::createTopup);
     router.post("/api/topups/update").handler(topup::updateTopup);
     router.post("/api/topups/trash/:topupId").handler(topup::trashTopup);
     router.post("/api/topups/restore/:topupId").handler(topup::restoreTopup);
+    router.delete("/api/topups/permanent/:topupId").handler(topup::deleteTopupPermanently);
+    // Backward-compatible alias for clients using the historical typo.
     router.delete("/api/topups/permenent/:topupId").handler(topup::deleteTopupPermanently);
     router.post("/api/topups/restore-all").handler(topup::restoreAllTopups);
     router.delete("/api/topups/permanent-all").handler(topup::deleteAllPermanentTopups);
@@ -238,6 +300,8 @@ public final class GatewayRoutes {
     router.get("/api/topups/yearly-methods-by-card/:cardNumber").handler(topup::getYearlyTopupMethodsByCardNumber);
     router.get("/api/topups/monthly-amounts-by-card/:cardNumber").handler(topup::getMonthlyTopupAmountsByCardNumber);
     router.get("/api/topups/yearly-amounts-by-card/:cardNumber").handler(topup::getYearlyTopupAmountsByCardNumber);
+    // KEEP AFTER the stats literal routes (see :cardId guard above)
+    router.get("/api/topups/:topupId").handler(topup::getTopupById);
 
     // =========================================================================
     // TRANSFER ROUTES (/api/transfers* prefix)
@@ -246,7 +310,6 @@ public final class GatewayRoutes {
     router.get("/api/transfers").handler(transfer::getAllTransfers);
     router.get("/api/transfers/active").handler(transfer::getActiveTransfers);
     router.get("/api/transfers/trashed").handler(transfer::getTrashedTransfers);
-    router.get("/api/transfers/:transferId").handler(transfer::getTransferById);
     router.get("/api/transfers/by-card/:cardNumber").handler(transfer::getTransfersByCardNumber);
     router.get("/api/transfers/transfer_from/:cardNumber").handler(transfer::getTransfersAsSender);
     router.get("/api/transfers/transfer_to/:cardNumber").handler(transfer::getTransfersAsReceiver);
@@ -273,6 +336,8 @@ public final class GatewayRoutes {
     router.get("/api/transfers/yearly-by-sender/:cardNumber").handler(transfer::getYearlyTransferAmountsBySenderCardNumber);
     router.get("/api/transfers/monthly-by-receiver/:cardNumber").handler(transfer::getMonthlyTransferAmountsByReceiverCardNumber);
     router.get("/api/transfers/yearly-by-receiver/:cardNumber").handler(transfer::getYearlyTransferAmountsByReceiverCardNumber);
+    // KEEP AFTER the stats literal routes (see :cardId guard above)
+    router.get("/api/transfers/:transferId").handler(transfer::getTransferById);
 
     // =========================================================================
     // WITHDRAW ROUTES (/api/withdraws* prefix)
@@ -281,7 +346,6 @@ public final class GatewayRoutes {
     router.get("/api/withdraws").handler(withdraw::getAllWithdraws);
     router.get("/api/withdraws/active").handler(withdraw::getActiveWithdraws);
     router.get("/api/withdraws/trashed").handler(withdraw::getTrashedWithdraws);
-    router.get("/api/withdraws/:withdrawId").handler(withdraw::getWithdrawById);
     router.post("/api/withdraws/create").handler(withdraw::createWithdraw);
     router.post("/api/withdraws/update").handler(withdraw::updateWithdraw);
     router.post("/api/withdraws/trash/:withdrawId").handler(withdraw::trash);
@@ -303,15 +367,27 @@ public final class GatewayRoutes {
     router.get("/api/withdraws/yearly-failed-by-card/:cardNumber").handler(withdraw::getYearlyWithdrawStatusFailedCardNumber);
     router.get("/api/withdraws/monthly-amount-bycard/:cardNumber").handler(withdraw::getMonthlyWithdrawsByCardNumber);
     router.get("/api/withdraws/yearly-amount-bycard/:cardNumber").handler(withdraw::getYearlyWithdrawsByCardNumber);
+    // KEEP AFTER the stats literal routes (see :cardId guard above)
+    router.get("/api/withdraws/:withdrawId").handler(withdraw::getWithdrawById);
 
     // =========================================================================
     // TRANSACTION ROUTES (/transactions* prefix)
     // =========================================================================
+    // Merchant API-KEY routes MUST be registered before the broad JWT-guarded
+    // /transactions* route: they authenticate with X-Api-Key only (no Bearer
+    // token) and would otherwise be rejected as Unauthorized by JwtMiddleware.
+    router.post("/transactions/create")
+        .handler(ApiKeyMiddleware.requireApiKey(merchantQueryClient))
+        .handler(transaction::createTransaction);
+
+    router.post("/transactions/update")
+        .handler(ApiKeyMiddleware.requireApiKey(merchantQueryClient))
+        .handler(transaction::updateTransaction);
+
     router.route("/transactions*").handler(JwtMiddleware.jwt(jwtAuth));
     router.get("/transactions").handler(transaction::getTransactions);
     router.get("/transactions/active").handler(transaction::getActiveTransactions);
     router.get("/transactions/trashed").handler(transaction::getTrashedTransactions);
-    router.get("/transactions/:transactionId").handler(transaction::getTransactionById);
     router.get("/transactions/by-card/:cardNumber").handler(transaction::getTransactionsByCardNumber);
     // Transaction stats
     router.get("/transactions/monthly-success").handler(transaction::getMonthTransactionStatusSuccess);
@@ -323,7 +399,7 @@ public final class GatewayRoutes {
     router.get("/transactions/monthly-amounts").handler(transaction::getMonthlyAmounts);
     router.get("/transactions/yearly-amounts").handler(transaction::getYearlyAmounts);
     // Transaction stats by card
-    router.get("/transactions/monthly-methods-by-card/:cardNumber").handler(transaction::getMonthTransactionStatusSuccessCardNumber);
+    router.get("/transactions/monthly-success-by-card/:cardNumber").handler(transaction::getMonthTransactionStatusSuccessCardNumber);
     router.get("/transactions/yearly-success-by-card/:cardNumber").handler(transaction::getYearlyTransactionStatusSuccessCardNumber);
     router.get("/transactions/monthly-failed-by-card/:cardNumber").handler(transaction::getMonthTransactionStatusFailedCardNumber);
     router.get("/transactions/yearly-failed-by-card/:cardNumber").handler(transaction::getYearlyTransactionStatusFailedCardNumber);
@@ -331,27 +407,37 @@ public final class GatewayRoutes {
     router.get("/transactions/yearly-methods-by-card/:cardNumber").handler(transaction::getYearlyPaymentMethodsByCardNumber);
     router.get("/transactions/monthly-amounts-by-card/:cardNumber").handler(transaction::getMonthlyAmountsByCardNumber);
     router.get("/transactions/yearly-amounts-by-card/:cardNumber").handler(transaction::getYearlyAmountsByCardNumber);
+    // KEEP AFTER the stats literal routes (see :cardId guard above)
+    router.get("/transactions/:transactionId").handler(transaction::getTransactionById);
     
     // Lifecycle commands
     router.post("/transactions/trash/:transactionId").handler(transaction::trashTransaction);
     router.post("/transactions/restore/:transactionId").handler(transaction::restoreTransaction);
+    router.delete("/transactions/permanent/:transactionId").handler(transaction::deleteTransactionPermanently);
+    // Backward-compatible alias for clients using the historical typo.
     router.delete("/transactions/permanenet/:transactionId").handler(transaction::deleteTransactionPermanently);
     router.post("/transactions/restore-all").handler(transaction::restoreAllTransactions);
     router.delete("/transactions/permanent-all").handler(transaction::deleteAllPermanentTransactions);
 
-    // Specialized Merchant API-KEY transactional routes
-    router.post("/transactions/create")
-        .handler(ApiKeyMiddleware.requireApiKey(merchantQueryClient))
-        .handler(transaction::createTransaction);
-
-    router.post("/transactions/update")
-        .handler(ApiKeyMiddleware.requireApiKey(merchantQueryClient))
-        .handler(transaction::updateTransaction);
-
     // =========================================================================
     // CHAOS CONTROL PLANE ROUTES
+    // Vert.x forbids adding an AUTHENTICATION handler (JWT) to a route whose first
+    // handler is a plain USER handler, so the disabled check and the protected
+    // handler live on two separate routes. When CHAOS_ENABLED=false the first route
+    // answers 404 without touching auth (default production behavior); when enabled
+    // it delegates to the protected route via next().
     // =========================================================================
     router.get("/api/chaos/policies").handler(ctx -> {
+      if (!chaosManager.isEnabled()) {
+        ctx.response().setStatusCode(404).end();
+        return;
+      }
+      ctx.next();
+    });
+    router.get("/api/chaos/policies")
+        .handler(JwtMiddleware.jwt(jwtAuth))
+        .handler(RoleMiddleware.requireRole("ROLE_ADMIN"))
+        .handler(ctx -> {
       JsonArray policiesArr = new JsonArray();
       chaosManager.getPolicies().forEach(policy -> {
         policiesArr.add(JsonObject.mapFrom(policy));
@@ -362,6 +448,16 @@ public final class GatewayRoutes {
     });
 
     router.post("/api/chaos/halt").handler(ctx -> {
+      if (!chaosManager.isEnabled()) {
+        ctx.response().setStatusCode(404).end();
+        return;
+      }
+      ctx.next();
+    });
+    router.post("/api/chaos/halt")
+        .handler(JwtMiddleware.jwt(jwtAuth))
+        .handler(RoleMiddleware.requireRole("ROLE_ADMIN"))
+        .handler(ctx -> {
       chaosManager.halt();
       ctx.response()
           .putHeader("Content-Type", "application/json")
@@ -369,11 +465,28 @@ public final class GatewayRoutes {
     });
 
     router.post("/api/chaos/policies/reload").handler(ctx -> {
+      if (!chaosManager.isEnabled()) {
+        ctx.response().setStatusCode(404).end();
+        return;
+      }
+      ctx.next();
+    });
+    router.post("/api/chaos/policies/reload")
+        .handler(JwtMiddleware.jwt(jwtAuth))
+        .handler(RoleMiddleware.requireRole("ROLE_ADMIN"))
+        .handler(ctx -> {
       chaosManager.loadConfig();
       ctx.response()
           .putHeader("Content-Type", "application/json")
           .end(new JsonObject().put("status", "success").put("message", "Chaos policies reloaded").encodePrettily());
     });
+
+    // =========================================================================
+    // GLOBAL FAILURE HANDLER (must be registered last)
+    // Maps synchronous handler exceptions (ApiException validation, invalid path
+    // params) to proper HTTP status codes instead of a generic 500.
+    // =========================================================================
+    router.route().failureHandler(GrpcGatewayUtils::handleRouteFailure);
 
     return router;
   }

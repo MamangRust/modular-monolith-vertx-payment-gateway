@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - transaction-deployment.yaml
-- transaction-service.yaml
 - transaction-hpa.yaml
+- transaction-service.yaml
+- pdb.yaml
+- network-policy.yaml

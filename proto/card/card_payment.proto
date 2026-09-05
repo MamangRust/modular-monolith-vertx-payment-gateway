@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package pb.card;
+
+option go_package = "github.com/MamangRust/monolith-payment-gateway-pb/card";
+
+import "card/card.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message PostPaymentRequest {
+  string reference_id = 1;
+  string card_number = 2;
+  int64 amount = 3;
+  string payment_channel = 4;
+  int32 statement_id = 5;
+}
+
+message PaymentResult {
+  string payment_id = 1;
+  string reference_id = 2;
+  string card_number = 3;
+  int64 amount = 4;
+  string payment_channel = 5;
+  string payment_time = 6;
+  string status = 7;
+  int32 statement_id = 8;
+  string created_at = 9;
+}
+
+message PostPaymentResponse {
+  string status = 1;
+  string message = 2;
+  PaymentResult data = 3;
+}
+
+message GetPaymentHistoryRequest {
+  string card_number = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message PaymentHistoryEntry {
+  string payment_id = 1;
+  string reference_id = 2;
+  int64 amount = 3;
+  string payment_channel = 4;
+  string payment_time = 5;
+  string status = 6;
+  int32 statement_id = 7;
+}
+
+message GetPaymentHistoryResponse {
+  string status = 1;
+  string message = 2;
+  repeated PaymentHistoryEntry data = 3;
+  int32 total = 4;
+}
+
+service CardPaymentService {
+  rpc PostPayment(PostPaymentRequest) returns (PostPaymentResponse) {}
+  rpc GetPaymentHistory(GetPaymentHistoryRequest) returns (GetPaymentHistoryResponse) {}
+}

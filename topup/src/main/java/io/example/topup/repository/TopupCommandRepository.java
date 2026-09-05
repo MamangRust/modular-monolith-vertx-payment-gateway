@@ -10,6 +10,8 @@ import io.example.topup.domain.requests.topup.UpdateTopupStatus;
 public interface TopupCommandRepository {
   Future<Topup> createTopup(CreateTopupRequest req);
 
+  Future<Topup> findByIdempotencyKey(String idempotencyKey);
+
   Future<Topup> updateTopup(UpdateTopupRequest req);
 
   Future<Topup> updateTopupAmount(UpdateTopupAmount req);

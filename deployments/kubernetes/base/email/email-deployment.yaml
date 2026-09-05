@@ -13,10 +13,6 @@ spec:
       labels:
         app: email
     spec:
-      securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
       initContainers:
         - name: init-log-permission
           image: busybox:1.35
@@ -35,16 +31,22 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
-              echo "[INIT] Waiting for Kafka to be ready (TCP)..."
+              echo "Waiting for Kafka to be ready (TCP)..."
               until nc -z kafka.payment-gateway.svc.cluster.local 9092; do
-                echo "Kafka is not ready yet. Retrying in 5 seconds..."
+                echo "Kafka is not ready yet. Waiting 5 seconds..."
                 sleep 5
               done
-              echo "[INIT] Kafka is ready!"
+              echo "Kafka is ready!"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
       containers:
         - name: email
-          image: email-service:1.1
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/__GHCR_OWNER__/vertx-payment-gateway/email:latest
           envFrom:
             - configMapRef:
                 name: app-config
@@ -54,22 +56,36 @@ spec:
             - containerPort: 8080
           resources:
             requests:
-              memory: "64Mi"
+              memory: "128Mi"
               cpu: "100m"
             limits:
-              memory: "128Mi"
+              memory: "256Mi"
               cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /metrics
+              path: /health/ready
               port: 8080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            failureThreshold: 30
             periodSeconds: 10
-            failureThreshold: 5
-          volumeMounts:
-            - name: app-logs
-              mountPath: /var/log/app
-      volumes:
-        - name: app-logs
-          persistentVolumeClaim:
-            claimName: app-logs-pvc
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          imagePullPolicy: IfNotPresent

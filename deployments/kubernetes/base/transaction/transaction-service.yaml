@@ -8,9 +8,9 @@ spec:
     app: transaction
   ports:
     - name: http-metrics
-      port: 8088
-      targetPort: 8088
+      port: 8089
+      targetPort: 8089
     - name: grpc
-      port: 50058
-      targetPort: 50058
+      port: 50059
+      targetPort: 50059
   type: ClusterIP

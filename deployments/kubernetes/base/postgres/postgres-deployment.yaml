@@ -51,7 +51,7 @@ spec:
             - -U
             - DRAGON
             - -d
-            - PAYMENT_GATEWAY
+            - ECOMMERCE
           initialDelaySeconds: 5
           periodSeconds: 5
       volumes:

@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - apigateway-deployment.yaml
-- apigateway-service.yaml
 - apigateway-hpa.yaml
+- apigateway-service.yaml
+- pdb.yaml
+- network-policy.yaml

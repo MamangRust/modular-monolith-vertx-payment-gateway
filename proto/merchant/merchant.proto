@@ -31,7 +31,7 @@ message FindAllMerchantTransaction {
   int32 merchant_id = 4;
 }
 
-message FindAllMerchantTransactionId {
+message FindAllMerchantTransactionId{
   int32 page = 1;
   int32 page_size = 2;
   string search = 3;

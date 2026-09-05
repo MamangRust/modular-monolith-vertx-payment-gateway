@@ -6,9 +6,9 @@ spec:
   capacity:
     storage: 5Gi
   accessModes:
-    - ReadWriteOnce 
+    - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: standard    
+  storageClassName: standard
   hostPath:
-    path: /var/log/app           
+    path: /var/log/app
     type: DirectoryOrCreate

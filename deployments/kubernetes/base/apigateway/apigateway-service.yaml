@@ -7,6 +7,10 @@ spec:
   selector:
     app: apigateway
   ports:
-  - port: 5000
+  - name: http
+    port: 5000
     targetPort: 5000
+  - name: metrics
+    port: 8100
+    targetPort: 8100
   type: ClusterIP

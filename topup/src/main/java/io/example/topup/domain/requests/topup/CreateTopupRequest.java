@@ -14,4 +14,5 @@ public class CreateTopupRequest {
   private String topupNo;
   private int topupAmount;
   private String topupMethod;
+  private String idempotencyKey;
 }

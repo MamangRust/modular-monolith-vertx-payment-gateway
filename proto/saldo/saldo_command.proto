@@ -40,10 +40,20 @@ message UpdateSaldoBalanceRequest {
   int32 total_balance = 2;
 }
 
+// Atomic delta-based balance mutation. A positive delta credits, a negative
+// delta debits. Debit is guarded so the balance never goes negative; the RPC
+// fails with a business error when the saldo is missing or the debit would
+// exceed the current balance.
+message UpdateSaldoDeltaRequest {
+  string card_number = 1;
+  int32 delta = 2;
+}
+
 service SaldoCommandService {
   rpc CreateSaldo(CreateSaldoRequest) returns (ApiResponseSaldo) {}
   rpc UpdateSaldo(UpdateSaldoRequest) returns (ApiResponseSaldo) {}
   rpc UpdateSaldoBalance(UpdateSaldoBalanceRequest) returns (ApiResponseSaldo) {}
+  rpc UpdateSaldoDelta(UpdateSaldoDeltaRequest) returns (ApiResponseSaldo) {}
   rpc UpdateSaldoWithdraw(UpdateSaldoWithdrawRequest)
       returns (ApiResponseSaldo) {}
   rpc TrashedSaldo(FindByIdSaldoRequest) returns (ApiResponseSaldoDeleteAt) {}

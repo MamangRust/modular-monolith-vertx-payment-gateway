@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package pb.card;
+
+option go_package = "github.com/MamangRust/monolith-payment-gateway-pb/card";
+
+import "card/card.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message AuthorizeRequest {
+  string card_number = 1;
+  int32 merchant_id = 2;
+  int64 amount = 3;
+  string currency = 4;
+  string pos_entry_mode = 5;
+  string mcc = 6;
+  string idempotency_key = 7;
+}
+
+message AuthorizeResponse {
+  string status = 1;
+  string message = 2;
+  AuthorizationResult data = 3;
+}
+
+message AuthorizationResult {
+  string txn_id = 1;
+  string card_number = 2;
+  int64 amount = 3;
+  string currency = 4;
+  string auth_code = 5;
+  string approval_status = 6; // APPROVED / DECLINED
+  string decline_code = 7;
+  int32 risk_score = 8;
+}
+
+message ReverseRequest {
+  string txn_id = 1;
+  string card_number = 2;
+  int64 amount = 3;
+  string idempotency_key = 4;
+}
+
+message ReverseResponse {
+  string status = 1;
+  string message = 2;
+  bool reversed = 3;
+}
+
+service CardAuthorizationService {
+  rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {}
+  rpc Reverse(ReverseRequest) returns (ReverseResponse) {}
+}

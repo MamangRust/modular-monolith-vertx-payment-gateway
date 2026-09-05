@@ -4,6 +4,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.NoSuchElementException;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Row;
@@ -35,13 +36,13 @@ public class Merchant {
         .put("status", status);
 
     if (createdAt != null) {
-      json.put("created_at", createdAt.toString());
+      json.put("created_at", createdAt.toInstant().toString());
     }
     if (updatedAt != null) {
-      json.put("updated_at", updatedAt.toString());
+      json.put("updated_at", updatedAt.toInstant().toString());
     }
     if (deletedAt != null) {
-      json.put("deleted_at", deletedAt.toString());
+      json.put("deleted_at", deletedAt.toInstant().toString());
     }
 
     return json;
@@ -70,10 +71,9 @@ public class Merchant {
     if (row == null)
       return null;
 
-    Integer id = row.getInteger("id");
-    if (id == null) {
-      id = row.getInteger("merchant_id");
-    }
+    // merchants PK is "merchant_id" (V6 migration); repositories alias it as "id".
+    // Row.getInteger throws NoSuchElementException for a missing column, so guard both.
+    Integer id = readId(row);
     String name = row.getString("name");
     String apiKey = row.getString("api_key");
     Integer userId = row.getInteger("user_id");
@@ -107,6 +107,22 @@ public class Merchant {
         .updatedAt(updatedAt)
         .deletedAt(deletedAt)
         .build();
+  }
+
+  static Integer readId(Row row) {
+    try {
+      Integer id = row.getInteger("id");
+      if (id != null) {
+        return id;
+      }
+    } catch (NoSuchElementException ignored) {
+      // query did not alias merchant_id AS id
+    }
+    try {
+      return row.getInteger("merchant_id");
+    } catch (NoSuchElementException ignored) {
+      return null;
+    }
   }
 
   private static Timestamp parseTimestamp(JsonObject json, String field) {

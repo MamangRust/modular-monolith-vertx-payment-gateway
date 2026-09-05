@@ -43,7 +43,7 @@ spec:
               echo "[INIT] Kafka is ready!"
       containers:
         - name: role
-          image: role-service:1.1
+          image: ghcr.io/__GHCR_OWNER__/vertx-payment-gateway/role:latest
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -55,18 +55,38 @@ spec:
             - containerPort: 50052
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "100m"
-            limits:
-              memory: "128Mi"
+              memory: "256Mi"
               cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /metrics
+              path: /health/ready
               port: 8082
-            initialDelaySeconds: 5
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8082
+            failureThreshold: 30
             periodSeconds: 10
-            failureThreshold: 5
           volumeMounts:
             - name: app-logs
               mountPath: /var/log/app

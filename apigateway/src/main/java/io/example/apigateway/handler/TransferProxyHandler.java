@@ -118,6 +118,7 @@ public class TransferProxyHandler {
         .setTransferFrom(GrpcGatewayUtils.getJsonString(body, "sender_card_number", ""))
         .setTransferTo(GrpcGatewayUtils.getJsonString(body, "receiver_card_number", ""))
         .setTransferAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
+        .setIdempotencyKey(GrpcGatewayUtils.getJsonString(body, "idempotency_key", ""))
         .build();
     commandClient.createTransfer(req)
         .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))

@@ -35,7 +35,7 @@ message FindAllMerchantTransactionId{
   int32 page = 1;
   int32 page_size = 2;
   string search = 3;
-  string id = 4;
+  int32 id = 4;
 }
 
 message FindAllMerchantTransactionApikey {

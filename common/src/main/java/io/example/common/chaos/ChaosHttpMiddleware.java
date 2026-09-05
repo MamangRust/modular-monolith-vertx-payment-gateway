@@ -10,12 +10,30 @@ public class ChaosHttpMiddleware implements Handler<RoutingContext> {
 
   private final ChaosManager manager;
 
+  /** Snapshot of {@code CHAOS_ENABLED} at construction; when false every request passes through. */
+  private final boolean enabled;
+
   public ChaosHttpMiddleware(ChaosManager manager) {
+    this(manager, manager.isEnabled());
+  }
+
+  /** Testable constructor for deterministic middleware integration tests. */
+  ChaosHttpMiddleware(ChaosManager manager, boolean enabled) {
     this.manager = manager;
+    this.enabled = enabled;
+    if (enabled) {
+      log.warn("⚠️ {}=true — HTTP chaos middleware installed",
+          ChaosManager.CHAOS_ENABLED_ENV);
+    }
   }
 
   @Override
   public void handle(RoutingContext ctx) {
+    if (!enabled) {
+      ctx.next();
+      return;
+    }
+
     String path = ctx.request().path();
     String method = ctx.request().method().name();
     String fullTarget = method + ":" + path;

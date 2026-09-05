@@ -5,7 +5,7 @@ metadata:
   namespace: payment-gateway
 spec:
   accessModes:
-  - ReadWriteOnce
+    - ReadWriteOnce
   resources:
     requests:
       storage: 5Gi

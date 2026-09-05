@@ -60,8 +60,15 @@ public class ChaosGrpcClientInterceptor implements InvocationHandler {
 
   /**
    * Wrap a {@link GrpcClient} with chaos interception for outbound calls.
+   *
+   * <p>Returns the client unwrapped unless {@code CHAOS_ENABLED=true}.
    */
   public static GrpcClient wrap(GrpcClient client, ChaosManager manager, Vertx vertx) {
+    if (!ChaosManager.isChaosEnabled()) {
+      return client;
+    }
+    log.warn("⚠️ {}=true — gRPC client chaos interceptor installed",
+        ChaosManager.CHAOS_ENABLED_ENV);
     return (GrpcClient) Proxy.newProxyInstance(
         GrpcClient.class.getClassLoader(),
         new Class<?>[]{GrpcClient.class},

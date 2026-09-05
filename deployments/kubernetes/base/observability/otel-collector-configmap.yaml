@@ -16,104 +16,108 @@ data:
       prometheus:
         config:
           scrape_configs:
-            - job_name: "otel-collector"
-              scrape_interval: 5s
-              static_configs:
-                - targets: ["localhost:8888"]
             - job_name: "kafka-exporter"
               scrape_interval: 5s
               static_configs:
-                - targets: ["kafka-exporter:9308"]
+                - targets: ["kafka-exporter.payment-gateway.svc.cluster.local:9308"]
+            - job_name: "apigateway-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["apigateway.payment-gateway.svc.cluster.local:8100"]
             - job_name: "auth-service"
               metrics_path: "/metrics"
               static_configs:
-                - targets: ["auth:8081"]
-                  labels:
-                    application: "Auth Service"
-                    environment: "production"
-            - job_name: "merchant-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["merchant:8084"]
-                  labels:
-                    application: "Merchant Service"
-                    environment: "production"
-            - job_name: "card-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["card:8083"]
-                  labels:
-                    application: "Card Service"
-                    environment: "production"
-            - job_name: "saldo-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["saldo:8086"]
-                  labels:
-                    application: "Saldo Service"
-                    environment: "production"
+                - targets: ["auth.payment-gateway.svc.cluster.local:8081"]
             - job_name: "role-service"
               metrics_path: "/metrics"
               static_configs:
-                - targets: ["role:8082"]
-                  labels:
-                    application: "Role Service"
-                    environment: "production"
-            - job_name: "topup-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["topup:8087"]
-                  labels:
-                    application: "Topup Service"
-                    environment: "production"
-            - job_name: "transaction-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["transaction:8088"]
-                  labels:
-                    application: "Transaction Service"
-                    environment: "production"
-            - job_name: "transfer-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["transfer:8089"]
-                  labels:
-                    application: "Transfer Service"
-                    environment: "production"
+                - targets: ["role.payment-gateway.svc.cluster.local:8082"]
             - job_name: "user-service"
               metrics_path: "/metrics"
               static_configs:
-                - targets: ["user:8085"]
-                  labels:
-                    application: "User Service"
-                    environment: "production"
+                - targets: ["user.payment-gateway.svc.cluster.local:8083"]
+            - job_name: "category-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["category.payment-gateway.svc.cluster.local:8084"]
+            - job_name: "merchant-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["merchant.payment-gateway.svc.cluster.local:8085"]
+            - job_name: "order-item-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["order-item.payment-gateway.svc.cluster.local:8086"]
+            - job_name: "order-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["order.payment-gateway.svc.cluster.local:8087"]
+            - job_name: "product-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["product.payment-gateway.svc.cluster.local:8088"]
+            - job_name: "transaction-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["transaction.payment-gateway.svc.cluster.local:8089"]
+            - job_name: "cart-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["cart.payment-gateway.svc.cluster.local:8090"]
+            - job_name: "review-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["review.payment-gateway.svc.cluster.local:8091"]
+            - job_name: "slider-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["slider.payment-gateway.svc.cluster.local:8092"]
+            - job_name: "shipping-address-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["shipping-address.payment-gateway.svc.cluster.local:8093"]
+            - job_name: "banner-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["banner.payment-gateway.svc.cluster.local:8094"]
+            - job_name: "merchant-award-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["merchant-award.payment-gateway.svc.cluster.local:8095"]
+            - job_name: "merchant-business-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["merchant-business.payment-gateway.svc.cluster.local:8096"]
+            - job_name: "merchant-detail-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["merchant-detail.payment-gateway.svc.cluster.local:8097"]
+            - job_name: "merchant-policy-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["merchant-policy.payment-gateway.svc.cluster.local:8098"]
+            - job_name: "review-detail-service"
+              metrics_path: "/metrics"
+              static_configs:
+                - targets: ["review-detail.payment-gateway.svc.cluster.local:8099"]
             - job_name: "email-service"
               metrics_path: "/metrics"
               static_configs:
-                - targets: ["email:8080"]
-                  labels:
-                    application: "Email Service"
-                    environment: "production"
-            - job_name: "withdraw-service"
-              metrics_path: "/metrics"
-              static_configs:
-                - targets: ["withdraw:8090"]
-                  labels:
-                    application: "Withdraw Service"
-                    environment: "production"
-            
-                  
+                - targets: ["email.payment-gateway.svc.cluster.local:8080"]
 
     processors:
       batch:
 
     exporters:
       otlp:
-        endpoint: "jaeger:4317"
+        endpoint: "jaeger.payment-gateway.svc.cluster.local:4317"
         tls:
           insecure: true
       prometheus:
-        endpoint: "0.0.0.0:8889"          
+        endpoint: "0.0.0.0:8889"
+        namespace: "java_app"
+        resource_to_telemetry_conversion:
+          enabled: true
       otlphttp/loki:
         endpoint: "http://loki.payment-gateway.svc.cluster.local:3100/otlp"
         tls:
@@ -136,7 +140,7 @@ data:
         metrics:
           receivers: [otlp, prometheus]
           processors: [batch]
-          exporters: [prometheus]   
+          exporters: [prometheus]
 
         logs:
           receivers: [otlp]

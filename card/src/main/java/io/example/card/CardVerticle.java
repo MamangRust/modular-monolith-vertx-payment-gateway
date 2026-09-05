@@ -3,21 +3,30 @@ package io.example.card;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.example.card.handler.CardAuthorizationHandler;
+import io.example.card.handler.CardBillingHandler;
 import io.example.card.handler.CardCommandHandler;
 import io.example.card.handler.CardDashboardHandler;
+import io.example.card.handler.CardLimitHandler;
+import io.example.card.handler.CardPaymentHandler;
 import io.example.card.handler.CardQueryHandler;
 import io.example.card.handler.CardStatsBalanceHandler;
 import io.example.card.handler.CardStatsTopupHandler;
 import io.example.card.handler.CardStatsTransactionHandler;
 import io.example.card.handler.CardStatsTransferHandler;
 import io.example.card.handler.CardStatsWithdrawHandler;
+import io.example.card.repository.BillingStatementRepository;
+import io.example.card.repository.CardAuthTransactionRepository;
 import io.example.card.repository.CardCommandRepository;
+import io.example.card.repository.CardCreditAccountRepository;
 import io.example.card.repository.CardDashboardBalanceRepository;
 import io.example.card.repository.CardDashboardTopupRepository;
 import io.example.card.repository.CardDashboardTransactionRepository;
 import io.example.card.repository.CardDashboardTransferRepository;
 import io.example.card.repository.CardDashboardWithdrawRepository;
+import io.example.card.repository.CardPaymentRepository;
 import io.example.card.repository.CardQueryRepository;
+import io.example.card.repository.CardRewardRepository;
 import io.example.card.repository.CardStatsBalanceByCardRepository;
 import io.example.card.repository.CardStatsBalanceRepository;
 import io.example.card.repository.CardStatsTopupByCardRepository;
@@ -29,13 +38,18 @@ import io.example.card.repository.CardStatsTransferRepository;
 import io.example.card.repository.CardStatsWithdrawByCardRepository;
 import io.example.card.repository.CardStatsWithdrawRepository;
 import io.example.card.repository.UserClientRepository;
+import io.example.card.repository.impl.BillingStatementRepositoryImpl;
+import io.example.card.repository.impl.CardAuthTransactionRepositoryImpl;
 import io.example.card.repository.impl.CardCommandRepositoryImpl;
+import io.example.card.repository.impl.CardCreditAccountRepositoryImpl;
 import io.example.card.repository.impl.CardDashboardBalanceRepositoryImpl;
 import io.example.card.repository.impl.CardDashboardTopupRepositoryImpl;
 import io.example.card.repository.impl.CardDashboardTransactionRepositoryImpl;
 import io.example.card.repository.impl.CardDashboardTransferRepositoryImpl;
 import io.example.card.repository.impl.CardDashboardWithdrawRepositoryImpl;
+import io.example.card.repository.impl.CardPaymentRepositoryImpl;
 import io.example.card.repository.impl.CardQueryRepositoryImpl;
+import io.example.card.repository.impl.CardRewardRepositoryImpl;
 import io.example.card.repository.impl.CardStatsBalanceByCardRepositoryImpl;
 import io.example.card.repository.impl.CardStatsBalanceRepositoryImpl;
 import io.example.card.repository.impl.CardStatsTopupByCardRepositoryImpl;
@@ -47,27 +61,41 @@ import io.example.card.repository.impl.CardStatsTransferRepositoryImpl;
 import io.example.card.repository.impl.CardStatsWithdrawByCardRepositoryImpl;
 import io.example.card.repository.impl.CardStatsWithdrawRepositoryImpl;
 import io.example.card.repository.impl.UserClientRepositoryImpl;
+import io.example.card.service.BillingEngineService;
+import io.example.card.service.CardAuthorizationService;
 import io.example.card.service.CardCommandService;
+import io.example.card.service.CardPaymentService;
 import io.example.card.service.CardQueryService;
+import io.example.card.service.CardRewardService;
 import io.example.card.service.CardStatsBalanceService;
 import io.example.card.service.CardStatsDashboardService;
 import io.example.card.service.CardStatsTopupService;
 import io.example.card.service.CardStatsTransactionService;
 import io.example.card.service.CardStatsTransferService;
 import io.example.card.service.CardStatsWithdrawService;
+import io.example.card.service.CreditLimitService;
+import io.example.card.service.impl.BillingEngineServiceImpl;
+import io.example.card.service.impl.CardAuthorizationServiceImpl;
 import io.example.card.service.impl.CardCommandServiceImpl;
+import io.example.card.service.impl.CardPaymentServiceImpl;
 import io.example.card.service.impl.CardQueryServiceImpl;
+import io.example.card.service.impl.CardRewardServiceImpl;
 import io.example.card.service.impl.CardStatsBalanceServiceImpl;
 import io.example.card.service.impl.CardStatsDashboardServiceImpl;
 import io.example.card.service.impl.CardStatsTopupServiceImpl;
 import io.example.card.service.impl.CardStatsTransactionServiceImpl;
 import io.example.card.service.impl.CardStatsTransferServiceImpl;
 import io.example.card.service.impl.CardStatsWithdrawServiceImpl;
+import io.example.card.service.impl.CreditLimitServiceImpl;
+import io.example.card.verticle.BillingSchedulerVerticle;
+import io.example.card.verticle.CardEventLogVerticle;
+import io.example.card.verticle.FraudScoringConsumerVerticle;
 import io.example.common.chaos.ChaosGrpcServerInterceptor;
 import io.example.common.chaos.ChaosKafkaInterceptor;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -94,6 +122,7 @@ public class CardVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(CardVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
   private KafkaService kafkaService;
   private io.vertx.grpc.client.GrpcClient userGrpcClient;
   private ChaosManager chaosManager;
@@ -103,13 +132,13 @@ public class CardVerticle extends AbstractVerticle {
 
     JsonObject config = new JsonObject()
         .put("database", new JsonObject()
-            .put("host", "postgres")
-            .put("port", 5432)
-            .put("database", "PAYMENT_GATEWAY")
-            .put("user", "DRAGON")
-            .put("password", "DRAGON")
-            .put("pool_size", 5))
-        .put("grpc_port", 8085)
+            .put("host", System.getenv().getOrDefault("DB_HOST", "postgres"))
+            .put("port", Integer.parseInt(System.getenv().getOrDefault("DB_PORT", "5432")))
+            .put("database", System.getenv().getOrDefault("DB_NAME", "PAYMENT_GATEWAY"))
+            .put("user", System.getenv().getOrDefault("DB_USERNAME", "vertx"))
+            .put("password", System.getenv().getOrDefault("DB_PASSWORD", "vertx"))
+            .put("pool_size", Integer.parseInt(System.getenv().getOrDefault("DB_POOL_SIZE", "5"))))
+        .put("grpc_port", Integer.parseInt(System.getenv().getOrDefault("GRPC_PORT", "8085")))
         .put("service.name", "card-service");
 
     DeploymentOptions options = new DeploymentOptions().setConfig(config);
@@ -117,7 +146,7 @@ public class CardVerticle extends AbstractVerticle {
     vertx.deployVerticle(new CardVerticle(), options)
         .onSuccess(id -> {
           log.info("✅ Card Service successfully deployed! ID: {}", id);
-          log.info("🚀 gRPC Server running on port 8085");
+          log.info("🚀 gRPC Server running on port {}", config.getInteger("grpc_port"));
         })
         .onFailure(err -> {
           log.error("❌ Failed to deploy CardVerticle", err);
@@ -146,7 +175,10 @@ public class CardVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -180,13 +212,27 @@ public class CardVerticle extends AbstractVerticle {
     CardStatsTransferRepository trfRepo = new CardStatsTransferRepositoryImpl(chaosPool);
     CardStatsTransferByCardRepository trfByCardRepo = new CardStatsTransferByCardRepositoryImpl(chaosPool);
 
+    // Card Lifecycle Repos (credit card features)
+    CardCreditAccountRepository creditAccountRepo = new CardCreditAccountRepositoryImpl(chaosPool);
+    CardAuthTransactionRepository authTxnRepo = new CardAuthTransactionRepositoryImpl(chaosPool);
+    BillingStatementRepository billingStmtRepo = new BillingStatementRepositoryImpl(chaosPool);
+    CardPaymentRepository paymentRepo = new CardPaymentRepositoryImpl(chaosPool);
+    CardRewardRepository rewardRepo = new CardRewardRepositoryImpl(chaosPool);
+
     // 3. Initialize Caching
     RedisAPI redisAPI = RedisConfig.createClient(vertx);
     RedisService redisService = new RedisService(redisAPI, openTelemetry);
 
     // 4. Initialize gRPC Clients
-    String userHost = rawConfig.getString("user_host", "localhost");
-    int userPort = rawConfig.getInteger("user_grpc_port", 8082);
+    // Env wins over config: CardVerticle.main() never populates user_host/user_grpc_port,
+    // so the old config-only defaults (localhost:8082) pointed nowhere in K8s/Docker,
+    // where the user service is reachable at user:50055.
+    String userHost = System.getenv().getOrDefault("USER_SERVICE_HOST",
+        rawConfig.getString("user_host", "user"));
+    int userPort = Integer.parseInt(
+        System.getenv().getOrDefault("USER_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_USER_PORT",
+                String.valueOf(rawConfig.getInteger("user_grpc_port", 50055)))));
     this.userGrpcClient = io.vertx.grpc.client.GrpcClient.client(vertx);
     var userStub = new pb.user.VertxUserQueryServiceGrpcClient(userGrpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(userPort, userHost));
@@ -216,6 +262,18 @@ public class CardVerticle extends AbstractVerticle {
     CardStatsTransferService trfService = new CardStatsTransferServiceImpl(trfRepo, trfByCardRepo, redisService,
         tracingMetrics);
 
+    // Card Lifecycle Services (credit card features)
+    CardAuthorizationService authService = new CardAuthorizationServiceImpl(
+        creditAccountRepo, authTxnRepo, redisService, tracingMetrics, kafkaService);
+    CardPaymentService paymentService = new CardPaymentServiceImpl(
+        paymentRepo, creditAccountRepo, redisService, tracingMetrics, kafkaService);
+    BillingEngineService billingService = new BillingEngineServiceImpl(
+        creditAccountRepo, billingStmtRepo, tracingMetrics, kafkaService);
+    CreditLimitService limitService = new CreditLimitServiceImpl(
+        creditAccountRepo, redisService, tracingMetrics, kafkaService);
+    CardRewardService rewardService = new CardRewardServiceImpl(
+        rewardRepo, redisService, tracingMetrics);
+
     // 6. Initialize Handlers
     var queryHandler = new CardQueryHandler(queryService);
     var cmdHandler = new CardCommandHandler(cmdService);
@@ -226,12 +284,52 @@ public class CardVerticle extends AbstractVerticle {
     var txnHandler = new CardStatsTransactionHandler(txnService);
     var trfHandler = new CardStatsTransferHandler(trfService);
 
+    // Card Lifecycle Handlers
+    var authHandler = new CardAuthorizationHandler(authService);
+    var paymentHandler = new CardPaymentHandler(paymentService);
+    var billingHandler = new CardBillingHandler(billingService);
+    var limitHandler = new CardLimitHandler(limitService);
+
     int port = cfg.getGrpcPort();
 
     startGrpcServer(queryHandler, cmdHandler, dashHandler, balHandler, topHandler, witHandler, txnHandler, trfHandler,
-        port)
+        authHandler, paymentHandler, billingHandler, limitHandler, port)
+        .compose(v -> {
+          // Deploy worker verticles for async processing
+          // Share the main verticle's database config verbatim. Using a null
+          // value for "database" breaks AppConfig.getDatabaseConfig() (Vert.x
+          // returns null, not the default, for a present-but-null value).
+          JsonObject databaseConfig = rawConfig.getJsonObject("database");
+          JsonObject workerConfig = new JsonObject()
+              .put("database", databaseConfig != null ? databaseConfig.copy() : new JsonObject())
+              .put("service.name", "card-worker");
+
+          DeploymentOptions workerOpts = new DeploymentOptions()
+              .setConfig(workerConfig)
+              .setWorker(true)
+              .setInstances(1);
+
+          return vertx.deployVerticle(new FraudScoringConsumerVerticle(), workerOpts)
+              .compose(id -> {
+                log.info("✅ FraudScoringConsumerVerticle deployed as worker: {}", id);
+                return vertx.deployVerticle(new BillingSchedulerVerticle(), workerOpts);
+              })
+              .compose(id -> {
+                log.info("✅ BillingSchedulerVerticle deployed as worker: {}", id);
+                return vertx.deployVerticle(new CardEventLogVerticle(), workerOpts);
+              })
+              .map(id -> {
+                log.info("✅ CardEventLogVerticle deployed as worker: {}", id);
+                return (Void) null;
+              })
+              .otherwise(err -> {
+                log.warn("⚠️ Worker verticle deployment failed (non-fatal): {}", err.getMessage());
+                return null;
+              });
+        })
         .onSuccess(v -> {
-          log.info("CardVerticle fully initialized with Granular Repositories. Listening for gRPC on port {}", port);
+          log.info("CardVerticle fully initialized with credit lifecycle features. Listening for gRPC on port {}", port);
+          grpcHealthService.setServing(true);
           startPromise.complete();
         })
         .onFailure(err -> {
@@ -242,6 +340,9 @@ public class CardVerticle extends AbstractVerticle {
 
   @Override
   public void stop(Promise<Void> stopPromise) {
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
+    }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
     }
@@ -263,6 +364,10 @@ public class CardVerticle extends AbstractVerticle {
       CardStatsWithdrawHandler witHandler,
       CardStatsTransactionHandler txnHandler,
       CardStatsTransferHandler trfHandler,
+      CardAuthorizationHandler authHandler,
+      CardPaymentHandler paymentHandler,
+      CardBillingHandler billingHandler,
+      CardLimitHandler limitHandler,
       int grpcPort) {
     GrpcServer grpcServer = GrpcServer.server(vertx);
 
@@ -276,9 +381,15 @@ public class CardVerticle extends AbstractVerticle {
     txnHandler.bindAll(grpcServer);
     trfHandler.bindAll(grpcServer);
 
+    authHandler.bindAll(grpcServer);
+    paymentHandler.bindAll(grpcServer);
+    billingHandler.bindAll(grpcServer);
+    limitHandler.bindAll(grpcServer);
+
     Handler<HttpServerRequest> chaosHandler =
         new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
 
+    grpcHealthService = new GrpcHealthService("card").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(chaosHandler)
         .listen(grpcPort)

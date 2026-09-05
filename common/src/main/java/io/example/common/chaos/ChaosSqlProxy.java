@@ -26,7 +26,21 @@ public class ChaosSqlProxy implements InvocationHandler {
     this.vertx = vertx;
   }
 
+  /**
+   * Wraps {@code pool} so SQL chaos policies can be applied.
+   *
+   * <p>Returns the pool <b>unwrapped</b> unless {@code CHAOS_ENABLED=true}. The wrapper is a
+   * reflective proxy that intercepts the connection/query lifecycle; leaving it installed in
+   * production means every query goes through {@link Proxy} and a single misconfigured
+   * chaos.yaml can inject faults into a live database. Gating here keeps all call sites
+   * unchanged while making production the safe default.
+   */
   public static Pool wrap(Pool pool, ChaosManager manager, Vertx vertx) {
+    if (!ChaosManager.isChaosEnabled()) {
+      return pool;
+    }
+    log.warn("⚠️ {}=true — SQL chaos proxy installed on the connection pool",
+        ChaosManager.CHAOS_ENABLED_ENV);
     return (Pool) Proxy.newProxyInstance(
         Pool.class.getClassLoader(),
         new Class<?>[] { Pool.class },

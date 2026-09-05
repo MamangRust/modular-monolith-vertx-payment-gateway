@@ -93,6 +93,7 @@ public class WithdrawProxyHandler {
     var req = WithdrawCommand.CreateWithdrawRequest.newBuilder()
         .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
         .setWithdrawAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
+        .setIdempotencyKey(GrpcGatewayUtils.getJsonString(body, "idempotency_key", ""))
         .build();
     commandClient.createWithdraw(req)
         .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))

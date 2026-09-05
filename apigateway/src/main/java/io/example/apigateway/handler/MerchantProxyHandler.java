@@ -145,7 +145,7 @@ public class MerchantProxyHandler {
     public void updateMerchant(RoutingContext ctx) {
         JsonObject body = ctx.body().asJsonObject();
         var req = MerchantCommand.UpdateMerchantRequest.newBuilder()
-                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
                 .setUserId(GrpcGatewayUtils.getJsonInteger(body, "user_id", 0))
                 .setName(GrpcGatewayUtils.getJsonString(body, "name", ""))
                 .setStatus(GrpcGatewayUtils.getJsonString(body, "status", ""))
@@ -158,7 +158,7 @@ public class MerchantProxyHandler {
     public void updateMerchantStatus(RoutingContext ctx) {
         JsonObject body = ctx.body().asJsonObject();
         var req = MerchantCommand.UpdateMerchantStatusRequest.newBuilder()
-                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "id", 0))
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
                 .setStatus(GrpcGatewayUtils.getJsonString(body, "status", ""))
                 .build();
         commandClient.updateMerchantStatus(req)
@@ -234,7 +234,7 @@ public class MerchantProxyHandler {
 
     public void findAllTransactionsByMerchantId(RoutingContext ctx) {
         var req = Merchant.FindAllMerchantTransactionId.newBuilder()
-                .setId(String.valueOf(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId")))
+                .setId(GrpcGatewayUtils.getSafePathInt(ctx, "merchantId"))
                 .setPage(GrpcGatewayUtils.getQueryInt(ctx, "page", 1))
                 .setPageSize(GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10))
                 .setSearch(GrpcGatewayUtils.getQueryString(ctx, "search", ""))
@@ -401,7 +401,7 @@ public class MerchantProxyHandler {
         var req = MerchantDocumentCommand.CreateMerchantDocumentRequest.newBuilder()
                 .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
                 .setDocumentType(GrpcGatewayUtils.getJsonString(body, "document_type", ""))
-                .setDocumentUrl(GrpcGatewayUtils.getJsonString(body, "document_path", ""))
+                .setDocumentUrl(GrpcGatewayUtils.getJsonString(body, "document_url", ""))
                 .build();
         docCommandClient.create(req)
                 .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))
@@ -414,7 +414,7 @@ public class MerchantProxyHandler {
                 .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
                 .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
                 .setDocumentType(GrpcGatewayUtils.getJsonString(body, "document_type", ""))
-                .setDocumentUrl(GrpcGatewayUtils.getJsonString(body, "document_path", ""))
+                .setDocumentUrl(GrpcGatewayUtils.getJsonString(body, "document_url", ""))
                 .build();
         docCommandClient.update(req)
                 .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
@@ -425,6 +425,7 @@ public class MerchantProxyHandler {
         JsonObject body = ctx.body().asJsonObject();
         var req = MerchantDocumentCommand.UpdateMerchantDocumentStatusRequest.newBuilder()
                 .setDocumentId(GrpcGatewayUtils.getSafePathInt(ctx, "documentId"))
+                .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
                 .setStatus(GrpcGatewayUtils.getJsonString(body, "status", ""))
                 .setNote(GrpcGatewayUtils.getJsonString(body, "note", ""))
                 .build();

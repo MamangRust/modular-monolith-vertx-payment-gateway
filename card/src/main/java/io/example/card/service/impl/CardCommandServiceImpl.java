@@ -46,15 +46,22 @@ public class CardCommandServiceImpl implements CardCommandService {
               .map(v -> card);
         })
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "createCard", "Success"))
-        .onFailure(e -> metrics.completeSpanError(ctx, "createCard", e.getMessage()));
+        .onFailure(e -> {
+          logger.error("createCard FAILED for userId {}: {}", request.getUserId(), e.getMessage(), e);
+          metrics.completeSpanError(ctx, "createCard", e.getMessage());
+        });
   }
 
   @Override
   public Future<Card> updateCard(UpdateCardRequest request) {
     var ctx = metrics.startSpan("CardCommandService.updateCard");
-    return userClient.getUserById(request.getUserId())
-        .compose(user -> repository.updateCard(request))
-        .compose(card -> redis.delete("card:" + card.getId()).map(v -> card))
+    // userId is optional for updates — only validate when provided (> 0)
+    Future<Void> userCheck = request.getUserId() > 0
+        ? userClient.getUserById(request.getUserId()).map(u -> (Void) null)
+        : Future.succeededFuture();
+    return userCheck
+        .compose(v -> repository.updateCard(request))
+        .compose(card -> redis.delete("card:" + card.getId()).map(v2 -> card))
         .onSuccess(r -> metrics.completeSpanSuccess(ctx, "updateCard", "Success"))
         .onFailure(e -> metrics.completeSpanError(ctx, "updateCard", e.getMessage()));
   }

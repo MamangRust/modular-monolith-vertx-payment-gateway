@@ -8,6 +8,7 @@ import io.example.common.chaos.ChaosKafkaInterceptor;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
 import io.example.common.observability.TracingMetrics;
@@ -84,6 +85,7 @@ public class MerchantVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(MerchantVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
   private ChaosManager chaosManager;
@@ -137,7 +139,10 @@ public class MerchantVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -181,7 +186,12 @@ public class MerchantVerticle extends AbstractVerticle {
     // 5. Initialize gRPC Clients
     this.grpcClient = GrpcClient.client(vertx);
     String userHost = System.getenv().getOrDefault("USER_SERVICE_HOST", "user");
-    int userPort = Integer.parseInt(System.getenv().getOrDefault("USER_SERVICE_PORT", "8083"));
+    // Canonical gRPC port for the user service is 50055 (K8s Service targetPort and
+    // GRPC_USER_PORT in docker.env). The previous default of 8083 pointed at the auth
+    // service's legacy port. GRPC_USER_* is honoured first so both paths agree.
+    int userPort = Integer.parseInt(
+        System.getenv().getOrDefault("USER_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_USER_PORT", "50055")));
     var userClient = new VertxUserQueryServiceGrpcClient(grpcClient,
         SocketAddress.inetSocketAddress(userPort, userHost));
     var userClientRepo = new UserClientRepository(userClient);
@@ -239,6 +249,7 @@ public class MerchantVerticle extends AbstractVerticle {
         statsMethHandler, statsTotHandler, port)
         .onSuccess(v -> {
           log.info("MerchantVerticle fully initialized. Listening for gRPC on port {}", port);
+          grpcHealthService.setServing(true);
           startPromise.complete();
         })
         .onFailure(err -> {
@@ -249,6 +260,9 @@ public class MerchantVerticle extends AbstractVerticle {
 
   @Override
   public void stop(Promise<Void> stopPromise) {
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
+    }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
     }
@@ -285,6 +299,7 @@ public class MerchantVerticle extends AbstractVerticle {
     Handler<HttpServerRequest> chaosHandler =
         new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
 
+    grpcHealthService = new GrpcHealthService("merchant").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(chaosHandler)
         .listen(grpcPort)

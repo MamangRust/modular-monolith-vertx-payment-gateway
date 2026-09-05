@@ -25,6 +25,7 @@ import io.vertx.core.Future;
 import io.vertx.core.json.JsonObject;
 import lombok.RequiredArgsConstructor;
 import io.example.saldo.domain.requests.CreateSaldoRequest;
+import io.example.saldo.domain.requests.UpdateSaldoDeltaRequest;
 import io.example.saldo.domain.requests.UpdateSaldoRequest;
 import io.example.saldo.domain.requests.UpdateSaldoBalanceRequest;
 import io.example.saldo.domain.requests.UpdateSaldoWithdrawRequest;
@@ -116,8 +117,12 @@ public class SaldoCommandServiceImpl implements SaldoCommandService {
 
     logger.info("Updating saldo: {}, card: {}", saldoId, req.getCardNumber());
 
-    return repoCard.getCardByCardNumber(req.getCardNumber())
-        .compose(card -> repo.updateSaldo(req))
+    // cardNumber is optional for updates — only validate when provided
+    Future<Void> cardCheck = req.getCardNumber() != null && !req.getCardNumber().isEmpty()
+        ? repoCard.getCardByCardNumber(req.getCardNumber()).map(c -> (Void) null)
+        : Future.succeededFuture();
+    return cardCheck
+        .compose(v -> repo.updateSaldo(req))
         .compose(updated -> {
           if (updated == null) {
             return Future.<Saldo>failedFuture(new NotFoundException("Saldo not found"));
@@ -172,6 +177,32 @@ public class SaldoCommandServiceImpl implements SaldoCommandService {
         .onFailure(err -> {
           logger.error("Failed to update saldo balance for card: {}", req.getCardNumber(), err);
           tracingMetrics.completeSpanError(tracingContext, "updateBalance", err.getMessage());
+        });
+  }
+
+  @Override
+  public Future<SaldoResponse> updateSaldoDelta(UpdateSaldoDeltaRequest req) {
+    TracingMetrics.TracingContext tracingContext = tracingMetrics.startSpan(
+        "SaldoCommandService.updateSaldoDelta",
+        Attributes.builder()
+            .put("saldo.cardNumber", Objects.requireNonNull(req.getCardNumber()))
+            .put("saldo.delta", req.getDelta())
+            .build());
+
+    return repo.updateSaldoDelta(req)
+        .compose(updated -> {
+          if (updated == null) {
+            return Future.<Saldo>failedFuture(
+                new BadRequestException("Saldo not found or insufficient balance"));
+          }
+          return invalidateCache(updated.getId()).<Saldo>map(v -> updated);
+        })
+        .map(SaldoResponse::from)
+        .onSuccess(v -> tracingMetrics.completeSpanSuccess(tracingContext, "updateDelta",
+            "Saldo delta applied successfully"))
+        .onFailure(err -> {
+          logger.error("Failed to apply saldo delta for card: {}", req.getCardNumber(), err);
+          tracingMetrics.completeSpanError(tracingContext, "updateDelta", err.getMessage());
         });
   }
 

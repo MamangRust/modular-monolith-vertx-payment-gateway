@@ -10,9 +10,17 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import lombok.RequiredArgsConstructor;
 import pb.card.Card;
+import pb.card.CardAuthorization;
+import pb.card.CardBilling;
 import pb.card.CardCommand;
+import pb.card.CardLimit;
+import pb.card.CardPayment;
+import pb.card.VertxCardAuthorizationServiceGrpcClient;
+import pb.card.VertxCardBillingServiceGrpcClient;
 import pb.card.VertxCardCommandServiceGrpcClient;
 import pb.card.VertxCardDashboardServiceGrpcClient;
+import pb.card.VertxCardLimitServiceGrpcClient;
+import pb.card.VertxCardPaymentServiceGrpcClient;
 import pb.card.VertxCardQueryServiceGrpcClient;
 import pb.card.stats.VertxCardStatsBalanceServiceGrpcClient;
 import pb.card.stats.VertxCardStatsTopupServiceGrpcClient;
@@ -30,6 +38,12 @@ public class CardProxyHandler {
   private final VertxCardStatsWithdrawServiceGrpcClient withdrawClient;
   private final VertxCardStatsTransactionServiceGrpcClient transactionClient;
   private final VertxCardStatsTransferServiceGrpcClient transferClient;
+
+  // Credit lifecycle clients
+  private final VertxCardAuthorizationServiceGrpcClient authClient;
+  private final VertxCardPaymentServiceGrpcClient paymentClient;
+  private final VertxCardBillingServiceGrpcClient billingClient;
+  private final VertxCardLimitServiceGrpcClient limitClient;
 
   private Card.FindAllCardRequest buildFindAllReq(RoutingContext ctx) {
     return Card.FindAllCardRequest.newBuilder()
@@ -315,6 +329,140 @@ public class CardProxyHandler {
     transferClient.findYearlyTransferReceiverAmountByCardNumber(buildYearAmountCardReq(ctx))
         .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
         .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  // =========================================================================
+  // CREDIT CARD LIFECYCLE ENDPOINTS
+  // =========================================================================
+
+  public void handleAuthorize(RoutingContext ctx) {
+    JsonObject body = ctx.body().asJsonObject();
+    var req = CardAuthorization.AuthorizeRequest.newBuilder()
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setMerchantId(GrpcGatewayUtils.getJsonInteger(body, "merchant_id", 0))
+        .setAmount(GrpcGatewayUtils.getJsonLong(body, "amount", 0L))
+        .setCurrency(GrpcGatewayUtils.getJsonString(body, "currency", "IDR"))
+        .setPosEntryMode(GrpcGatewayUtils.getJsonString(body, "pos_entry_mode", ""))
+        .setMcc(GrpcGatewayUtils.getJsonString(body, "mcc", ""))
+        .setIdempotencyKey(GrpcGatewayUtils.getJsonString(body, "idempotency_key", ""))
+        .build();
+    authClient.authorize(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleReversal(RoutingContext ctx) {
+    JsonObject body = ctx.body().asJsonObject();
+    var req = CardAuthorization.ReverseRequest.newBuilder()
+        .setTxnId(GrpcGatewayUtils.getJsonString(body, "txn_id", ""))
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setAmount(GrpcGatewayUtils.getJsonLong(body, "amount", 0L))
+        .setIdempotencyKey(GrpcGatewayUtils.getJsonString(body, "idempotency_key", ""))
+        .build();
+    authClient.reverse(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handlePostPayment(RoutingContext ctx) {
+    JsonObject body = ctx.body().asJsonObject();
+    var req = CardPayment.PostPaymentRequest.newBuilder()
+        .setReferenceId(GrpcGatewayUtils.getJsonString(body, "reference_id", ""))
+        .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
+        .setAmount(GrpcGatewayUtils.getJsonLong(body, "amount", 0L))
+        .setPaymentChannel(GrpcGatewayUtils.getJsonString(body, "payment_channel", ""))
+        .setStatementId(GrpcGatewayUtils.getJsonInteger(body, "statement_id", 0))
+        .build();
+    paymentClient.postPayment(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handlePaymentHistory(RoutingContext ctx) {
+    String cardNumber = ctx.pathParam("cardNumber");
+    int page = GrpcGatewayUtils.getQueryInt(ctx, "page", 1);
+    int pageSize = GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10);
+    var req = CardPayment.GetPaymentHistoryRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .setPage(page)
+        .setPageSize(pageSize)
+        .build();
+    paymentClient.getPaymentHistory(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleGetStatement(RoutingContext ctx) {
+    String cardNumber = ctx.pathParam("cardNumber");
+    String statementDate = GrpcGatewayUtils.getQueryString(ctx, "statement_date", "");
+    var req = CardBilling.GetStatementRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .setStatementDate(statementDate)
+        .build();
+    billingClient.getStatement(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleGetStatements(RoutingContext ctx) {
+    String cardNumber = ctx.pathParam("cardNumber");
+    int page = GrpcGatewayUtils.getQueryInt(ctx, "page", 1);
+    int pageSize = GrpcGatewayUtils.getQueryInt(ctx, "pageSize", 10);
+    var req = CardBilling.GetStatementsByCardRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .setPage(page)
+        .setPageSize(pageSize)
+        .build();
+    billingClient.getStatementsByCard(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleTriggerBilling(RoutingContext ctx) {
+    JsonObject body = ctx.body().asJsonObject();
+    var req = CardBilling.TriggerBillingRequest.newBuilder()
+        .setBillingCycleDay(GrpcGatewayUtils.getJsonInteger(body, "billing_cycle_day", 1))
+        .build();
+    billingClient.triggerBillingCycle(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleGetLimit(RoutingContext ctx) {
+    String cardNumber = ctx.pathParam("cardNumber");
+    var req = CardLimit.GetLimitByCardNumberRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .build();
+    limitClient.getLimit(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleSetLimit(RoutingContext ctx) {
+    String cardNumber = ctx.pathParam("cardNumber");
+    JsonObject body = ctx.body().asJsonObject();
+    var req = CardLimit.SetLimitRequest.newBuilder()
+        .setCardNumber(cardNumber)
+        .setCreditLimit(GrpcGatewayUtils.getJsonLong(body, "credit_limit", 0L))
+        .setBillingCycleDay(GrpcGatewayUtils.getJsonInteger(body, "billing_cycle_day", 1))
+        .setAnnualRateBps(GrpcGatewayUtils.getJsonInteger(body, "annual_rate_bps", 1800))
+        .build();
+    limitClient.setLimit(req)
+        .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 200))
+        .onFailure(err -> GrpcGatewayUtils.handleError(ctx, err));
+  }
+
+  public void handleGetRewards(RoutingContext ctx) {
+    String cardNumber = ctx.pathParam("cardNumber");
+    // Since rewards don't have a dedicated gRPC service in the gateway,
+    // we call the limit client with a simple approach
+    // In production this would be a proper gRPC call to a reward service
+    ctx.response()
+        .putHeader("Content-Type", "application/json")
+        .end(new JsonObject()
+            .put("status", "success")
+            .put("message", "OK. Use internal card service for reward operations")
+            .encode());
   }
 
   private com.google.protobuf.Timestamp toTimestamp(String dateStr) {

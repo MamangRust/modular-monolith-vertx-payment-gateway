@@ -29,7 +29,7 @@ public class TopupQueryRepositoryImpl implements TopupQueryRepository {
     String sql = """
         SELECT *, COUNT(*) OVER() AS total_count FROM topups
         WHERE deleted_at IS NULL
-          AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%' OR topup_no ILIKE '%' || $1 || '%' OR topup_method ILIKE '%' || $1 || '%' OR status ILIKE '%' || $1 || '%')
+          AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%' OR topup_no::TEXT ILIKE '%' || $1 || '%' OR topup_method ILIKE '%' || $1 || '%' OR status ILIKE '%' || $1 || '%')
         ORDER BY topup_time DESC LIMIT $2 OFFSET $3
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(normalizeSearch(req.getSearch()), req.getPageSize(), offset))
@@ -42,7 +42,7 @@ public class TopupQueryRepositoryImpl implements TopupQueryRepository {
     String sql = """
         SELECT *, COUNT(*) OVER() AS total_count FROM topups
         WHERE deleted_at IS NULL AND status = 'ACTIVE'
-          AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%' OR topup_no ILIKE '%' || $1 || '%' OR topup_method ILIKE '%' || $1 || '%')
+          AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%' OR topup_no::TEXT ILIKE '%' || $1 || '%' OR topup_method ILIKE '%' || $1 || '%')
         ORDER BY topup_time DESC LIMIT $2 OFFSET $3
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(normalizeSearch(req.getSearch()), req.getPageSize(), offset))
@@ -55,7 +55,7 @@ public class TopupQueryRepositoryImpl implements TopupQueryRepository {
     String sql = """
         SELECT *, COUNT(*) OVER() AS total_count FROM topups
         WHERE deleted_at IS NULL AND card_number = $1
-          AND ($2::TEXT IS NULL OR topup_no ILIKE '%' || $2 || '%' OR topup_method ILIKE '%' || $2 || '%' OR status ILIKE '%' || $2 || '%')
+          AND ($2::TEXT IS NULL OR topup_no::TEXT ILIKE '%' || $2 || '%' OR topup_method ILIKE '%' || $2 || '%' OR status ILIKE '%' || $2 || '%')
         ORDER BY topup_time DESC LIMIT $3 OFFSET $4
         """;
     return pool.preparedQuery(sql)
@@ -69,7 +69,7 @@ public class TopupQueryRepositoryImpl implements TopupQueryRepository {
     String sql = """
         SELECT *, COUNT(*) OVER() AS total_count FROM topups
         WHERE deleted_at IS NOT NULL
-          AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%' OR topup_no ILIKE '%' || $1 || '%' OR topup_method ILIKE '%' || $1 || '%')
+          AND ($1::TEXT IS NULL OR card_number ILIKE '%' || $1 || '%' OR topup_no::TEXT ILIKE '%' || $1 || '%' OR topup_method ILIKE '%' || $1 || '%')
         ORDER BY topup_time DESC LIMIT $2 OFFSET $3
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(normalizeSearch(req.getSearch()), req.getPageSize(), offset))

@@ -4,7 +4,9 @@ import io.example.transfer.model.Transfer;
 import io.vertx.core.Future;
 
 public interface TransferCommandRepository {
-  Future<Transfer> createTransfer(String from, String to, long amount);
+  Future<Transfer> createTransfer(String from, String to, long amount, String idempotencyKey);
+
+  Future<Transfer> findByIdempotencyKey(String idempotencyKey);
 
   Future<Transfer> updateTransfer(int id, String from, String to, long amount);
 

@@ -20,23 +20,47 @@ public class TopupCommandRepositoryImpl implements TopupCommandRepository {
   @Override
   public Future<Topup> createTopup(CreateTopupRequest req) {
     String sql = """
-        INSERT INTO topups (card_number, topup_no, topup_amount, topup_method, topup_time, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO topups (card_number, topup_no, topup_amount, topup_method, idempotency_key, topup_time, status, created_at, updated_at)
+        VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL AND deleted_at IS NULL DO NOTHING
         RETURNING *
         """;
+    String idempotencyKey = req.getIdempotencyKey() != null && !req.getIdempotencyKey().isBlank()
+        ? req.getIdempotencyKey()
+        : null;
+    // topup_no is UUID-typed in Postgres with DEFAULT gen_random_uuid(); send null when
+    // blank so the DB generates it instead of failing to coerce an empty string.
+    String topupNo = req.getTopupNo() != null && !req.getTopupNo().isBlank()
+        ? req.getTopupNo()
+        : null;
     return pool.preparedQuery(sql)
-        .execute(Tuple.of(req.getCardNumber(), req.getTopupNo(), req.getTopupAmount(), req.getTopupMethod()))
+        .execute(Tuple.of(req.getCardNumber(), topupNo, req.getTopupAmount(), req.getTopupMethod(), idempotencyKey))
+        .map(this::mapSingleOrNull);
+  }
+
+  @Override
+  public Future<Topup> findByIdempotencyKey(String idempotencyKey) {
+    String sql = "SELECT * FROM topups WHERE idempotency_key = $1 AND deleted_at IS NULL LIMIT 1";
+    return pool.preparedQuery(sql)
+        .execute(Tuple.of(idempotencyKey))
         .map(this::mapSingleOrNull);
   }
 
   @Override
   public Future<Topup> updateTopup(UpdateTopupRequest req) {
     String sql = """
-        UPDATE topups SET card_number = $2, topup_amount = $3, topup_method = $4, updated_at = CURRENT_TIMESTAMP
+        UPDATE topups
+        SET card_number = COALESCE(NULLIF($2, ''), card_number),
+            topup_amount = COALESCE(NULLIF($3, 0), topup_amount),
+            topup_method = COALESCE(NULLIF($4, ''), topup_method),
+            updated_at = CURRENT_TIMESTAMP
         WHERE topup_id = $1 AND deleted_at IS NULL RETURNING *
         """;
     return pool.preparedQuery(sql)
-        .execute(Tuple.of(req.getTopupId(), req.getCardNumber(), req.getTopupAmount(), req.getTopupMethod()))
+        .execute(Tuple.of(req.getTopupId(),
+            req.getCardNumber() != null ? req.getCardNumber() : "",
+            req.getTopupAmount(),
+            req.getTopupMethod() != null ? req.getTopupMethod() : ""))
         .map(this::mapSingleOrNull);
   }
 

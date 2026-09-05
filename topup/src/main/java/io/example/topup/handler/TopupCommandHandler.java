@@ -23,6 +23,7 @@ public class TopupCommandHandler implements pb.topup.VertxTopupCommandServiceGrp
         .topupNo(req.getTopupNo())
         .topupAmount(req.getTopupAmount())
         .topupMethod(req.getTopupMethod())
+        .idempotencyKey(req.getIdempotencyKey())
         .build();
 
     return service.createTopup(domainReq)

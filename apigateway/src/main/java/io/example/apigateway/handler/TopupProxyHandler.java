@@ -97,6 +97,7 @@ public class TopupProxyHandler {
         .setCardNumber(GrpcGatewayUtils.getJsonString(body, "card_number", ""))
         .setTopupAmount(GrpcGatewayUtils.getJsonInteger(body, "amount", 0))
         .setTopupMethod(GrpcGatewayUtils.getJsonString(body, "topup_method", ""))
+        .setIdempotencyKey(GrpcGatewayUtils.getJsonString(body, "idempotency_key", ""))
         .build();
     commandClient.createTopup(req)
         .onSuccess(r -> GrpcGatewayUtils.sendResponse(ctx, r, 201))

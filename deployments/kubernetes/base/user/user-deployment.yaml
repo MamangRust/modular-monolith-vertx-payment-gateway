@@ -43,7 +43,7 @@ spec:
               echo "[INIT] Kafka is ready!"
       containers:
         - name: user
-          image: user-service:1.1
+          image: ghcr.io/__GHCR_OWNER__/vertx-payment-gateway/user:latest
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
@@ -51,22 +51,42 @@ spec:
             - secretRef:
                 name: app-secrets
           ports:
-            - containerPort: 8085
-            - containerPort: 50055
+            - containerPort: 8083
+            - containerPort: 50053
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8083
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /metrics
-              port: 8085
-            initialDelaySeconds: 5
+              path: /health/ready
+              port: 8083
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8083
+            failureThreshold: 30
             periodSeconds: 10
-            failureThreshold: 5
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "100m"
-            limits:
-              memory: "128Mi"
+              memory: "256Mi"
               cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           volumeMounts:
             - name: app-logs
               mountPath: /var/log/app

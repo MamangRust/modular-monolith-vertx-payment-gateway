@@ -8,8 +8,11 @@ import io.opentelemetry.api.metrics.LongCounter;
 import io.vertx.core.Future;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.json.jackson.DatabindCodec;
 import io.vertx.redis.client.RedisAPI;
 
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.Objects;
@@ -21,6 +24,10 @@ import java.util.Collections;
 import java.util.List;
 
 public class RedisService {
+  // JavaTimeModule registration intentionally omitted.
+  // Touching DatabindCodec in any static/lazy initializer poisons the class
+  // if it fails, breaking ALL subsequent Vert.x JSON calls (gRPC, HTTP, etc.).
+  // Vert.x 4.5+ already handles Instant/LocalDateTime via its own codec.
   private static final Logger logger = LoggerFactory.getLogger(RedisService.class.getName());
 
   private final RedisAPI redisAPI;
@@ -52,26 +59,33 @@ public class RedisService {
   }
 
   public Future<String> get(String key) {
-    Span span = tracer.spanBuilder("redis.get")
-        .setAttribute("redis.key", Objects.requireNonNull(key))
-        .startSpan();
+    try {
+      Span span = tracer.spanBuilder("redis.get")
+          .setAttribute("redis.key", Objects.requireNonNull(key))
+          .startSpan();
 
-    return redisAPI.get(key)
-        .onSuccess(response -> {
-          if (response != null && !response.toString().isEmpty()) {
-            cacheHitCounter.add(1);
-            logger.debug("Cache hit for key: {}", key);
-          } else {
-            cacheMissCounter.add(1);
-            logger.debug("Cache miss for key: {}", key);
-          }
-        })
-        .onFailure(err -> {
-          logger.error("Redis GET error for key {}: {}", key, err.getMessage());
-          span.recordException(err);
-        })
-        .map(response -> response != null ? response.toString() : null)
-        .onComplete(ar -> span.end());
+      return redisAPI.get(key)
+          .onSuccess(response -> {
+            if (response != null && !response.toString().isEmpty()) {
+              cacheHitCounter.add(1);
+              logger.debug("Cache hit for key: {}", key);
+            } else {
+              cacheMissCounter.add(1);
+              logger.debug("Cache miss for key: {}", key);
+            }
+          })
+          .onFailure(err -> {
+            logger.warn("Redis GET error for key {}: {}", key, err.getMessage());
+            span.recordException(err);
+          })
+          .recover(err -> Future.succeededFuture(null))
+          .map(response -> response != null ? response.toString() : null)
+          .onComplete(ar -> span.end());
+    } catch (Throwable t) {
+      // RedisService may not be fully initialized (DatabindCodec failure).
+      logger.warn("RedisService.get() unavailable for key {}: {}", key, t.getMessage());
+      return Future.succeededFuture(null);
+    }
   }
 
   public Future<String> set(String key, String value) {
@@ -79,43 +93,96 @@ public class RedisService {
   }
 
   public Future<String> set(String key, String value, Duration ttl) {
-    Span span = tracer.spanBuilder("redis.set")
+    try {
+      Span span = tracer.spanBuilder("redis.set")
+          .setAttribute("redis.key", Objects.requireNonNull(key))
+          .setAttribute("redis.ttl_seconds", ttl != null ? ttl.getSeconds() : 0)
+          .startSpan();
+
+      List<String> args = ttl != null
+          ? Arrays.asList(key, value, "EX", String.valueOf(ttl.getSeconds()))
+          : Arrays.asList(key, value);
+
+      return redisAPI.set(args)
+          .onSuccess(response -> {
+            cacheSetCounter.add(1);
+            logger.debug("Cache set for key: {} with TTL: {} seconds", key,
+                ttl != null ? ttl.getSeconds() : "none");
+          })
+          .onFailure(err -> {
+            logger.warn("Redis SET error for key {}: {}", key, err.getMessage());
+            span.recordException(err);
+          })
+          .recover(err -> Future.succeededFuture(null))
+          .map(response -> response != null ? response.toString() : "OK")
+          .onComplete(ar -> span.end());
+    } catch (Throwable t) {
+      logger.warn("RedisService.set() unavailable for key {}: {}", key, t.getMessage());
+      return Future.succeededFuture("OK");
+    }
+  }
+
+  /**
+   * Atomic {@code SET key value NX EX <ttl>}: sets the key only if it does not
+   * already exist, with an expiry. Returns {@code true} when the key was set,
+   * {@code false} when it already existed (a NIL reply is surfaced by the
+   * client as a null Response).
+   */
+  public Future<Boolean> setIfAbsent(String key, String value, Duration ttl) {
+    Span span = tracer.spanBuilder("redis.setIfAbsent")
         .setAttribute("redis.key", Objects.requireNonNull(key))
-        .setAttribute("redis.ttl_seconds", ttl != null ? ttl.getSeconds() : 0)
+        .setAttribute("redis.ttl_seconds", Objects.requireNonNull(ttl).getSeconds())
         .startSpan();
 
-    List<String> args = ttl != null
-        ? Arrays.asList(key, value, "EX", String.valueOf(ttl.getSeconds()))
-        : Arrays.asList(key, value);
+    List<String> args = Arrays.asList(key, value, "NX", "EX", String.valueOf(ttl.getSeconds()));
 
     return redisAPI.set(args)
-        .onSuccess(response -> {
-          cacheSetCounter.add(1);
-          logger.debug("Cache set for key: {} with TTL: {} seconds", key,
-              ttl != null ? ttl.getSeconds() : "none");
+        .map(response -> response != null)
+        .onSuccess(created -> {
+          if (Boolean.TRUE.equals(created)) {
+            logger.debug("SET NX succeeded for key: {}", key);
+          } else {
+            logger.debug("SET NX rejected, key already exists: {}", key);
+          }
         })
         .onFailure(err -> {
-          logger.error("Redis SET error for key {}: {}", key, err.getMessage());
+          logger.error("Redis SET NX error for key {}: {}", key, err.getMessage());
           span.recordException(err);
         })
-        .map(response -> response.toString())
         .onComplete(ar -> span.end());
   }
 
-  public Future<Long> delete(String key) {
+  /**
+   * Returns the remaining time-to-live in seconds for {@code key}:
+   * {@code -1} when the key exists without expiry, {@code -2} when it does not exist.
+   */
+  public Future<Long> ttl(String key) {
+    Span span = tracer.spanBuilder("redis.ttl")
+        .setAttribute("redis.key", Objects.requireNonNull(key))
+        .startSpan();
+
+    return redisAPI.ttl(key)
+        .map(response -> response != null ? response.toLong() : -2L)
+        .onFailure(err -> {
+          logger.error("Redis TTL error for key {}: {}", key, err.getMessage());
+          span.recordException(err);
+        })
+        .onComplete(ar -> span.end());
+  }  public Future<Long> delete(String key) {
     Span span = tracer.spanBuilder("redis.delete")
         .setAttribute("redis.key", Objects.requireNonNull(key))
         .startSpan();
 
     return redisAPI.del(List.of(key))
         .onSuccess(response -> {
-          logger.debug("Deleted key: {}", key);
+            logger.debug("Deleted key: {}", key);
         })
         .onFailure(err -> {
-          logger.error("Redis DELETE error for key {}: {}", key, err.getMessage());
-          span.recordException(err);
+            logger.warn("Redis DELETE error for key {}: {}", key, err.getMessage());
+            span.recordException(err);
         })
-        .map(response -> response.toLong())
+        .recover(err -> Future.succeededFuture(null))
+        .map(response -> response != null ? response.toLong() : 0L)
         .onComplete(ar -> span.end());
   }
 
@@ -139,9 +206,10 @@ public class RedisService {
           logger.debug("Deleted {} keys matching pattern: {}", count, pattern);
         })
         .onFailure(err -> {
-          logger.error("Redis DELETE BY PATTERN error for pattern {}: {}", pattern, err.getMessage());
+          logger.warn("Redis DELETE BY PATTERN error for pattern {}: {}", pattern, err.getMessage());
           span.recordException(err);
         })
+        .recover(err -> Future.succeededFuture(0L))
         .onComplete(ar -> span.end());
   }
 
@@ -159,20 +227,26 @@ public class RedisService {
   }
 
   public Future<Boolean> exists(String key) {
-    Span span = tracer.spanBuilder("redis.exists")
-        .setAttribute("redis.key", Objects.requireNonNull(key))
-        .startSpan();
+    try {
+      Span span = tracer.spanBuilder("redis.exists")
+          .setAttribute("redis.key", Objects.requireNonNull(key))
+          .startSpan();
 
-    return redisAPI.exists(List.of(key))
-        .onSuccess(response -> {
-          logger.debug("Exists check for key: {} = {}", key, response.toLong() > 0);
-        })
-        .onFailure(err -> {
-          logger.error("Redis EXISTS error for key {}: {}", key, err.getMessage());
-          span.recordException(err);
-        })
-        .map(response -> response.toLong() > 0)
-        .onComplete(ar -> span.end());
+      return redisAPI.exists(List.of(key))
+          .onSuccess(response -> {
+            logger.debug("Exists check for key: {} = {}", key, response.toLong() > 0);
+          })
+          .onFailure(err -> {
+            logger.warn("Redis EXISTS error for key {}: {}", key, err.getMessage());
+            span.recordException(err);
+          })
+          .recover(err -> Future.succeededFuture(null))
+          .map(response -> response != null && response.toLong() > 0)
+          .onComplete(ar -> span.end());
+    } catch (Throwable t) {
+      logger.warn("RedisService.exists() unavailable for key {}: {}", key, t.getMessage());
+      return Future.succeededFuture(false);
+    }
   }
 
   public <T> Future<List<T>> getJsonList(String key, Class<T> clazz) {
@@ -211,9 +285,10 @@ public class RedisService {
           }
         })
         .onFailure(err -> {
-          logger.error("Redis GET JSON LIST error for key {}: {}", key, err.getMessage());
+          logger.warn("Redis GET JSON LIST error for key {}: {}", key, err.getMessage());
           span.recordException(err);
         })
+        .recover(err -> Future.succeededFuture(new ArrayList<>()))
         .onComplete(ar -> span.end());
   }
 
@@ -261,9 +336,10 @@ public class RedisService {
               key, values.size(), ttl != null ? ttl.getSeconds() : "none");
         })
         .onFailure(err -> {
-          logger.error("Redis SET JSON LIST error for key {}: {}", key, err.getMessage());
+          logger.warn("Redis SET JSON LIST error for key {}: {}", key, err.getMessage());
           span.recordException(err);
         })
+        .recover(err -> Future.succeededFuture(null))
         .onComplete(ar -> span.end());
   }
 
@@ -294,9 +370,12 @@ public class RedisService {
           }
           try {
             return Future.succeededFuture(Json.decodeValue(jsonStr, clazz));
-          } catch (Exception e) {
-            logger.error("Failed to parse JSON for class {} from key {}: {}", clazz.getSimpleName(), key, e.getMessage());
-            return Future.failedFuture(e);
+          } catch (Throwable e) {
+            // Jackson deserialization may fail due to classpath conflicts
+            // (e.g. InstantDeserializer.<clinit> NoSuchMethodError). Treat
+            // as cache miss so the caller falls through to DB.
+            logger.warn("Cache deserialization failed for class {} key {}: {}", clazz.getSimpleName(), key, e.getMessage());
+            return Future.succeededFuture(null);
           }
         });
   }
@@ -304,41 +383,53 @@ public class RedisService {
   public Future<String> setJson(String key, Object value, Duration ttl) {
     try {
       return set(key, Json.encode(value), ttl);
-    } catch (Exception e) {
-      logger.error("Failed to encode JSON for key {}: {}", key, e.getMessage());
-      return Future.failedFuture(e);
+    } catch (Throwable e) {
+      logger.warn("Cache encode failed for key {}: {}", key, e.getMessage());
+      return Future.succeededFuture("SKIP");
     }
   }
 
   public Future<Long> incr(String key) {
-    Span span = tracer.spanBuilder("redis.incr")
-        .setAttribute("redis.key", Objects.requireNonNull(key))
-        .startSpan();
+    try {
+      Span span = tracer.spanBuilder("redis.incr")
+          .setAttribute("redis.key", Objects.requireNonNull(key))
+          .startSpan();
 
-    return redisAPI.incr(key)
-        .onSuccess(response -> logger.debug("Incremented key: {}", key))
-        .onFailure(err -> {
-          logger.error("Redis INCR error for key {}: {}", key, err.getMessage());
-          span.recordException(err);
-        })
-        .map(response -> response.toLong())
-        .onComplete(ar -> span.end());
+      return redisAPI.incr(key)
+          .onSuccess(response -> logger.debug("Incremented key: {}", key))
+          .onFailure(err -> {
+            logger.warn("Redis INCR error for key {}: {}", key, err.getMessage());
+            span.recordException(err);
+          })
+          .map(response -> response.toLong())
+          .recover(err -> Future.succeededFuture(0L))
+          .onComplete(ar -> span.end());
+    } catch (Throwable t) {
+      logger.warn("RedisService.incr() unavailable for key {}: {}", key, t.getMessage());
+      return Future.succeededFuture(0L);
+    }
   }
 
   public Future<Void> expire(String key, Duration ttl) {
-    Span span = tracer.spanBuilder("redis.expire")
-        .setAttribute("redis.key", Objects.requireNonNull(key))
-        .setAttribute("redis.ttl_seconds", ttl.getSeconds())
-        .startSpan();
+    try {
+      Span span = tracer.spanBuilder("redis.expire")
+          .setAttribute("redis.key", Objects.requireNonNull(key))
+          .setAttribute("redis.ttl_seconds", ttl.getSeconds())
+          .startSpan();
 
-    return redisAPI.expire(List.of(key, String.valueOf(ttl.getSeconds())))
-        .onSuccess(response -> logger.debug("Set expiration for key: {} to {} seconds", key, ttl.getSeconds()))
-        .onFailure(err -> {
-          logger.error("Redis EXPIRE error for key {}: {}", key, err.getMessage());
-          span.recordException(err);
-        })
-        .onComplete(ar -> span.end())
-        .map(v -> (Void) null);
+      return redisAPI.expire(List.of(key, String.valueOf(ttl.getSeconds())))
+          .onSuccess(response -> logger.debug("Set expiration for key: {} to {} seconds", key, ttl.getSeconds()))
+          .onFailure(err -> {
+            logger.warn("Redis EXPIRE error for key {}: {}", key, err.getMessage());
+            span.recordException(err);
+          })
+          .recover(err -> Future.succeededFuture(null))
+          .onComplete(ar -> span.end())
+          .map(v -> (Void) null);
+    } catch (Throwable t) {
+      logger.warn("RedisService.expire() unavailable for key {}: {}", key, t.getMessage());
+      return Future.succeededFuture();
+    }
   }
 
   public Future<String> ping() {

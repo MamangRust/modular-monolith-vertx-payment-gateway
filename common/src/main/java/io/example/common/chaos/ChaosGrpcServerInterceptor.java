@@ -34,14 +34,27 @@ public class ChaosGrpcServerInterceptor implements Handler<HttpServerRequest> {
   private final ChaosManager manager;
   private final Vertx vertx;
 
+  /** Snapshot of {@code CHAOS_ENABLED} at construction; when false every call passes through. */
+  private final boolean enabled;
+
   public ChaosGrpcServerInterceptor(GrpcServer delegate, ChaosManager manager, Vertx vertx) {
     this.delegate = delegate;
     this.manager = manager;
     this.vertx = vertx;
+    this.enabled = ChaosManager.isChaosEnabled();
+    if (enabled) {
+      log.warn("⚠️ {}=true — gRPC server chaos interceptor installed",
+          ChaosManager.CHAOS_ENABLED_ENV);
+    }
   }
 
   @Override
   public void handle(HttpServerRequest request) {
+    if (!enabled) {
+      delegate.handle(request);
+      return;
+    }
+
     String path = request.path();
     if (path == null || path.isEmpty()) {
       delegate.handle(request);

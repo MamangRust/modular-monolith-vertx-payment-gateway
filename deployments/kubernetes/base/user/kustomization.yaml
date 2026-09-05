@@ -3,5 +3,7 @@ kind: Kustomization
 
 resources:
 - user-deployment.yaml
-- user-service.yaml
 - user-hpa.yaml
+- user-service.yaml
+- pdb.yaml
+- network-policy.yaml

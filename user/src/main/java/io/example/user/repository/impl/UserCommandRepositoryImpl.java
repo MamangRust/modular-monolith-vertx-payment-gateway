@@ -38,8 +38,12 @@ public class UserCommandRepositoryImpl implements UserCommandRepository {
   public Future<User> updateUser(UpdateUserRequest request) {
     return client
         .preparedQuery(
-            "UPDATE users SET firstname = $1, lastname = $2, email = $3, updated_at = CURRENT_TIMESTAMP WHERE user_id = $4 AND deleted_at IS NULL RETURNING user_id, firstname, lastname, email, password, created_at, updated_at, deleted_at")
-        .execute(Tuple.of(request.getFirstName(), request.getLastName(), request.getEmail(), request.getUserId()))
+            "UPDATE users SET firstname = COALESCE(NULLIF($1, ''), firstname), lastname = COALESCE(NULLIF($2, ''), lastname), email = COALESCE(NULLIF($3, ''), email), updated_at = CURRENT_TIMESTAMP WHERE user_id = $4 AND deleted_at IS NULL RETURNING user_id, firstname, lastname, email, password, created_at, updated_at, deleted_at")
+        .execute(Tuple.of(
+            request.getFirstName() != null ? request.getFirstName() : "",
+            request.getLastName() != null ? request.getLastName() : "",
+            request.getEmail() != null ? request.getEmail() : "",
+            request.getUserId()))
         .map(this::mapSingleOrNull);
   }
 

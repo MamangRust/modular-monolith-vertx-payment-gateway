@@ -24,10 +24,14 @@ public class SaldoClientRepository {
         });
   }
 
-  public Future<ApiResponseSaldo> updateSaldoBalance(String cardNumber, int newBalance) {
-    return commandStub.updateSaldoBalance(UpdateSaldoBalanceRequest.newBuilder()
+  /**
+   * Atomically applies a delta to the card balance via the saldo service.
+   * Positive delta credits, negative delta debits (guarded, never negative).
+   */
+  public Future<ApiResponseSaldo> updateSaldoDelta(String cardNumber, int delta) {
+    return commandStub.updateSaldoDelta(UpdateSaldoDeltaRequest.newBuilder()
         .setCardNumber(cardNumber)
-        .setTotalBalance(newBalance)
+        .setDelta(delta)
         .build())
         .compose(resp -> {
           if (resp.getStatus().equals("error")) {

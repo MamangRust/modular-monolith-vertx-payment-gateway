@@ -14,22 +14,37 @@ public class TransferCommandRepositoryImpl implements TransferCommandRepository 
   private final Pool pool;
 
   @Override
-  public Future<Transfer> createTransfer(String from, String to, long amount) {
+  public Future<Transfer> createTransfer(String from, String to, long amount, String idempotencyKey) {
     String sql = """
-        INSERT INTO transfers (transfer_from, transfer_to, transfer_amount, transfer_time, status, created_at, updated_at)
-        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO transfers (transfer_from, transfer_to, transfer_amount, idempotency_key, transfer_time, status, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL AND deleted_at IS NULL DO NOTHING
         RETURNING *
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(from, to, amount)).map(this::mapSingleOrNull);
+    String key = idempotencyKey != null && !idempotencyKey.isBlank() ? idempotencyKey : null;
+    return pool.preparedQuery(sql).execute(Tuple.of(from, to, amount, key)).map(this::mapSingleOrNull);
+  }
+
+  @Override
+  public Future<Transfer> findByIdempotencyKey(String idempotencyKey) {
+    String sql = "SELECT * FROM transfers WHERE idempotency_key = $1 AND deleted_at IS NULL LIMIT 1";
+    return pool.preparedQuery(sql).execute(Tuple.of(idempotencyKey)).map(this::mapSingleOrNull);
   }
 
   @Override
   public Future<Transfer> updateTransfer(int id, String from, String to, long amount) {
     String sql = """
-        UPDATE transfers SET transfer_from = $2, transfer_to = $3, transfer_amount = $4, updated_at = CURRENT_TIMESTAMP
+        UPDATE transfers
+        SET transfer_from = COALESCE(NULLIF($2, ''), transfer_from),
+            transfer_to = COALESCE(NULLIF($3, ''), transfer_to),
+            transfer_amount = COALESCE(NULLIF($4, 0), transfer_amount),
+            updated_at = CURRENT_TIMESTAMP
         WHERE transfer_id = $1 AND deleted_at IS NULL RETURNING *
         """;
-    return pool.preparedQuery(sql).execute(Tuple.of(id, from, to, amount)).map(this::mapSingleOrNull);
+    return pool.preparedQuery(sql).execute(Tuple.of(id,
+        from != null ? from : "",
+        to != null ? to : "",
+        amount)).map(this::mapSingleOrNull);
   }
 
   @Override

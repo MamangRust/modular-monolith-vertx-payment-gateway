@@ -21,6 +21,7 @@ public class Withdraw {
   private String cardNumber;
   private Long withdrawAmount;
   private String status;
+  private String idempotencyKey;
 
   private OffsetDateTime withdrawTime;
   private OffsetDateTime createdAt;
@@ -52,6 +53,7 @@ public class Withdraw {
         .cardNumber(json.getString("card_number"))
         .withdrawAmount(json.getLong("withdraw_amount"))
         .status(json.getString("status"))
+        .idempotencyKey(json.getString("idempotency_key"))
         .withdrawTime(parseTime(json.getString("withdraw_time")))
         .createdAt(parseTime(json.getString("created_at")))
         .updatedAt(parseTime(json.getString("updated_at")))
@@ -73,6 +75,7 @@ public class Withdraw {
         .cardNumber(row.getString("card_number"))
         .withdrawAmount(row.getLong("withdraw_amount"))
         .status(row.getString("status"))
+        .idempotencyKey(row.getString("idempotency_key"))
         .withdrawTime(toOffsetDateTime(row, "withdraw_time"))
         .createdAt(toOffsetDateTime(row, "created_at"))
         .updatedAt(toOffsetDateTime(row, "updated_at"))

@@ -1,12 +1,12 @@
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: payment-gateway
+  name: ecommerce
   namespace: argocd
   finalizers:
   - resources-finalizer.argocd.argoproj.io
 spec:
-  description: Payment Gateway modular monolith project
+  description: E-Commerce modular monolith project
   sourceRepos:
   - '*'
   destinations:

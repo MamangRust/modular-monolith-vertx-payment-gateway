@@ -10,21 +10,61 @@ The platform is fortified with a **comprehensive observability suite** (Promethe
 
 ## Key Features
 
-| Domain | Capabilities |
-| :--- | :--- |
-| **Auth & Users** | Secure registration, multi-factor login, stateless JWT access/refresh token lifecycle, password reset workflows, OTP email verification, and `/me` profile REST endpoint. |
-| **Roles & RBAC** | Custom permission configuration, granular access control matrices, and sub-second permission evaluation cached via Redis. |
-| **Cards & VCC** | Virtual and debit card CRUD operations with soft-delete capabilities, card activation/suspension toggles, and multi-dimensional transaction analytics (daily/monthly/yearly topup, withdraw, transfer). |
-| **Merchants** | Fully featured merchant onboarding, profile details management, business data registration, and merchant performance/transaction reports with full data restoration capabilities (soft delete & restore). |
-| **Saldo (Balance)** | High-throughput, thread-safe real-time balance calculations, optimistic concurrency locks, and localized balances. |
-| **Topup** | Balance loading ledger engine supporting multiple payment methods, detailed transactions logging, and soft-delete audit records. |
-| **Transaction** | Centralized financial audit ledger collecting transaction events across the system, global search filters, status tracking, and monthly/yearly volume reports. |
-| **Transfer** | Safe peer-to-peer card-to-card or user-to-user funds settlement with balance debit/credit synchronization and event-driven logging. |
-| **Withdraw** | Funds settlement from user cards to external accounts/banks, daily transaction threshold limits, and status processing pipelines. |
-| **Email Worker** | Kafka-driven asynchronous worker dispatching critical notification emails (OTPs, login alerts, merchant onboarding notices, and transfer/topup invoices) via SMTP. |
-| **Observability** | Multi-dimensional metrics (Prometheus + Grafana), log aggregation (Loki + Logback), end-to-end distributed tracing (Jaeger + OpenTelemetry), and resource monitors (Node, Kafka, Postgres Exporters). |
-| **Chaos Engine** | Built-in reactive chaos injection framework supporting dynamic YAML-based policies for HTTP routing, database/SQL interceptors, and resource stress constraints (CPU/Memory). |
-| **Deployment** | Local orchestration using Docker Compose (featuring a 6-node Redis Cluster and PgBouncer), and auto-scaling Kubernetes manifests configured with Horizontal Pod Autoscalers (HPA). |
+| Domain              | Capabilities                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Auth & Users**    | Secure registration, multi-factor login, stateless JWT access/refresh token lifecycle, password reset workflows, OTP email verification, and `/me` profile REST endpoint.                                                                                                                                                                                                                                                                             |
+| **Roles & RBAC**    | Custom permission configuration, granular access control matrices, and sub-second permission evaluation cached via Redis.                                                                                                                                                                                                                                                                                                                             |
+| **Cards & VCC**     | Virtual and debit card CRUD operations with soft-delete capabilities, card activation/suspension toggles, **credit card lifecycle management (authorization, capture, void, refund)**, **automated billing cycle processing**, **dynamic credit limit management**, **rewards/points tracking**, **real-time fraud scoring via Kafka event streaming**, and multi-dimensional transaction analytics (daily/monthly/yearly topup, withdraw, transfer). |
+| **Merchants**       | Fully featured merchant onboarding, profile details management, business data registration, and merchant performance/transaction reports with full data restoration capabilities (soft delete & restore).                                                                                                                                                                                                                                             |
+| **Saldo (Balance)** | High-throughput, thread-safe real-time balance calculations, optimistic concurrency locks, and localized balances.                                                                                                                                                                                                                                                                                                                                    |
+| **Topup**           | Balance loading ledger engine supporting multiple payment methods, detailed transactions logging, and soft-delete audit records.                                                                                                                                                                                                                                                                                                                      |
+| **Transaction**     | Centralized financial audit ledger collecting transaction events across the system, global search filters, status tracking, and monthly/yearly volume reports.                                                                                                                                                                                                                                                                                        |
+| **Transfer**        | Safe peer-to-peer card-to-card or user-to-user funds settlement with balance debit/credit synchronization and event-driven logging.                                                                                                                                                                                                                                                                                                                   |
+| **Withdraw**        | Funds settlement from user cards to external accounts/banks, daily transaction threshold limits, and status processing pipelines.                                                                                                                                                                                                                                                                                                                     |
+| **Email Worker**    | Kafka-driven asynchronous worker dispatching critical notification emails (OTPs, login alerts, merchant onboarding notices, and transfer/topup invoices) via SMTP.                                                                                                                                                                                                                                                                                    |
+| **Observability**   | Multi-dimensional metrics (Prometheus + Grafana), log aggregation (Loki + Logback), end-to-end distributed tracing (Jaeger + OpenTelemetry), and resource monitors (Node, Kafka, Postgres Exporters).                                                                                                                                                                                                                                                 |
+| **Chaos Engine**    | Built-in reactive chaos injection framework supporting dynamic YAML-based policies for HTTP routing, database/SQL interceptors, and resource stress constraints (CPU/Memory).                                                                                                                                                                                                                                                                         |
+| **Deployment**      | Local orchestration using Docker Compose (featuring a 6-node Redis Cluster and PgBouncer), and auto-scaling Kubernetes manifests configured with Horizontal Pod Autoscalers (HPA).                                                                                                                                                                                                                                                                    |
+
+---
+
+## Card Credit Lifecycle & Fraud Detection
+
+The **Card Service** has been expanded with a full credit card lifecycle management system and real-time fraud detection capabilities, turning it into a complete card management platform.
+
+### Credit Card Features
+
+| Feature                | Service                    | Description                                                                                                                                         |
+| :--------------------- | :------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Authorization**      | `CardAuthorizationService` | Pre-authorization, capture, void, and refund operations. Manages hold amounts on credit accounts with automatic expiration of stale authorizations. |
+| **Payment Processing** | `CardPaymentService`       | End-to-end payment transaction flow with balance validation, status tracking, and full audit logging.                                               |
+| **Billing Engine**     | `BillingEngineService`     | Automated monthly billing cycle processing — generates billing statements, calculates minimum payments, applies late fees, and processes payments.  |
+| **Credit Limits**      | `CreditLimitService`       | Dynamic credit limit management with real-time available balance computation, limit increase/decrease requests, and utilization tracking.           |
+| **Rewards**            | `CardRewardService`        | Points accrual based on transaction volume/category, reward redemption, tier-based multipliers, and points expiration management.                   |
+
+### Background Worker Verticles
+
+Two Vert.x **worker verticles** run alongside the main gRPC server for asynchronous processing:
+
+- **`FraudScoringConsumerVerticle`** — Consumes transaction events from a dedicated Kafka topic, applies configurable scoring rules (velocity checks, amount thresholds, geographic anomalies), and publishes fraud alerts for high-risk transactions.
+- **`BillingSchedulerVerticle`** — Runs on a scheduled timer to detect billable accounts, generate monthly statements, trigger email notifications, and close billing cycles — all without blocking the main gRPC event loop.
+
+```mermaid
+graph LR
+    classDef card fill:#1e1b4b,stroke:#818cf8,color:#e0e7ff
+    classDef worker fill:#431407,stroke:#fb923c,color:#fed7aa
+    classDef stream fill:#172554,stroke:#60a5fa,color:#dbeafe
+
+    CARD["Card gRPC Service"]:::card
+    KAFKA{{"Kafka<br/>fraud-events"}}:::stream
+    FRAUD["FraudScoringConsumerVerticle<br/>(Worker)"]:::worker
+    BILL["BillingSchedulerVerticle<br/>(Worker)"]:::worker
+
+    CARD -->|"Publish transaction"| KAFKA
+    KAFKA -->|"Consume & score"| FRAUD
+    FRAUD -->|"Flag suspicious"| CARD
+    BILL -.->|"Timer-triggered cycles"| CARD
+```
 
 ---
 
@@ -149,6 +189,7 @@ graph TB
     AUTH -->|gRPC| ROLE
     MERCH -->|gRPC| USER
     CARD -->|gRPC| USER
+    CARD -->|gRPC| SALDO
     TOPUP -->|gRPC| SALDO
     TOPUP -->|gRPC| TXN
     TRANSFER -->|gRPC| CARD
@@ -159,6 +200,7 @@ graph TB
     WITHDRAW -->|gRPC| TXN
 
     AUTH -.->|"Publish Verification Event"| KAFKA
+    CARD -.->|"Publish Fraud Scoring Events"| KAFKA
     TOPUP -.->|"Publish Topup Event"| KAFKA
     TRANSFER -.->|"Publish Transfer Event"| KAFKA
     WITHDRAW -.->|"Publish Withdraw Event"| KAFKA
@@ -203,7 +245,7 @@ graph TB
 
 ## Service Catalog
 
-The modular architecture consists of **12 logical micro-applications** plus supporting database and migrations:
+The modular architecture consists of **12 logical micro-applications** plus supporting background workers and database migrations:
 
 ```mermaid
 graph LR
@@ -226,7 +268,7 @@ graph LR
     end
 
     subgraph Finance["Finance & Card Suite (2)"]
-        F1["card"]:::svc
+        F1["card<br/>VCC + Credit Lifecycle"]:::svc
         F2["saldo"]:::svc
     end
 
@@ -417,46 +459,50 @@ graph TB
     PROM_TSDB --> ALERTMGR
 ```
 
-| Pillar | Tool | Purpose |
-| :--- | :--- | :--- |
-| **Metrics** | Prometheus + Grafana | Core metrics tracking (CPU, memory, request error rates, gRPC latencies, DB connection states). |
-| **Logging** | Loki + Logback | Centralized structured JSON logger for indexing logs by service, queryable via LogQL. |
-| **Tracing** | OpenTelemetry + Jaeger | Distributed system tracing across API gateway and internal gRPC services. |
-| **Alerting** | Alertmanager | Automated notification system triggered during latency hikes or service disconnects. |
-
+| Pillar       | Tool                   | Purpose                                                                                         |
+| :----------- | :--------------------- | :---------------------------------------------------------------------------------------------- |
+| **Metrics**  | Prometheus + Grafana   | Core metrics tracking (CPU, memory, request error rates, gRPC latencies, DB connection states). |
+| **Logging**  | Loki + Logback         | Centralized structured JSON logger for indexing logs by service, queryable via LogQL.           |
+| **Tracing**  | OpenTelemetry + Jaeger | Distributed system tracing across API gateway and internal gRPC services.                       |
+| **Alerting** | Alertmanager           | Automated notification system triggered during latency hikes or service disconnects.            |
 
 ## Chaos Engineering Platform
 
-The payment gateway features a built-in **reactive Chaos Engineering engine** to continuously test system resilience under failure conditions (database spikes, slow endpoints, CPU stress, and memory leaks). 
+The payment gateway features a built-in **reactive Chaos Engineering engine** to continuously test system resilience under failure conditions (database spikes, slow endpoints, CPU stress, and memory leaks).
 
 ### How It Works
+
 The chaos engine is managed by [ChaosManager.java](./common/src/main/java/io/example/common/chaos/ChaosManager.java) which dynamically watches the configuration file [chaos.yaml](./chaos.yaml) for modifications:
+
 - **Dynamic Hot-Reloading**: Every 5 seconds, the engine checks `chaos.yaml` for changes. Adjusting values or toggling policies will update the running system instantly without requiring a service restart.
 
 ### Injection Mechanisms
+
 1. **HTTP Routing Chaos** ([ChaosHttpMiddleware.java](./common/src/main/java/io/example/common/chaos/ChaosHttpMiddleware.java)): Intercepts API router entry points to inject specified latency hikes or HTTP errors (e.g., status code 429 - rate limits).
 2. **Database SQL Chaos** ([ChaosSqlProxy.java](./common/src/main/java/io/example/common/chaos/ChaosSqlProxy.java)): Wraps database clients in a dynamic proxy, injecting database transaction latency or simulating sudden lock wait timeouts/deadlocks when queries hit matching tables.
 3. **Resource Stress Chaos** ([ChaosResourceSabotage.java](.//common/src/main/java/io/example/common/chaos/ChaosResourceSabotage.java)): Spawns CPU/memory pressure routines to simulate container hardware throttling or memory exhaustion.
 
 ### Configuration Example (`chaos.yaml`)
+
 To simulate failures, configure policies in [chaos.yaml](./chaos.yaml):
+
 ```yaml
 policies:
-  - name: "http-get-saldos-limit"
-    type: "http"
-    target: "GET:/api/saldos"
-    enabled: true        # Enable to inject 1000ms latency and 429 status code with 50% chance
+  - name: 'http-get-saldos-limit'
+    type: 'http'
+    target: 'GET:/api/saldos'
+    enabled: true # Enable to inject 1000ms latency and 429 status code with 50% chance
     errorChance: 0.5
     errorCode: 429
     errorBody: '{"error":"too_many_requests","message":"Rate limit exceeded"}'
     latencyMs: 1000
 
-  - name: "sql-user-query-deadlock"
-    type: "sql"
-    target: "users"
+  - name: 'sql-user-query-deadlock'
+    type: 'sql'
+    target: 'users'
     enabled: false
     errorChance: 0.2
-    errorMessage: "ERROR: deadlock detected"
+    errorMessage: 'ERROR: deadlock detected'
     latencyMs: 500
 ```
 
@@ -532,7 +578,7 @@ flowchart TB
     end
 
     NGINX --> APIGW
-    
+
     APIGW -->|gRPC| AUTH
     APIGW -->|gRPC| USER
     APIGW -->|gRPC| ROLE
@@ -678,7 +724,7 @@ flowchart TB
 
         subgraph DomainServices["Internal gRPC Microservices"]
             direction TB
-            
+
             subgraph IdentityZone["Identity Suite"]
                 AUTH_POD["auth-pods"]:::pod
                 USER_POD["user-pods"]:::pod
@@ -710,7 +756,7 @@ flowchart TB
                 TRANSFER_SVC["transfer-service (gRPC)"]:::k8sSvc
                 WITHDRAW_SVC["withdraw-service (gRPC)"]:::k8sSvc
             end
-            
+
             PodsHPA["Domain Services HPAs<br/>(auth, card, merchant, etc.)"]:::hpa
         end
 
@@ -720,10 +766,10 @@ flowchart TB
 
             PG_SVC["postgres-service<br/>(ClusterIP :5432)"]:::k8sSvc
             PG_POD["postgres-pods"]:::pod
-            
+
             REDIS_SVC["redis-cluster-service<br/>(ClusterIP :6379)"]:::k8sSvc
             REDIS_SET[("redis-cluster StatefulSet<br/>(6-Node Shards)")]:::stateful
-            
+
             KAFKA_SVC["kafka-service<br/>(ClusterIP :9092)"]:::k8sSvc
             KAFKA_POD["kafka-pods"]:::pod
         end
@@ -754,7 +800,7 @@ flowchart TB
             ALERTMGR_POD["alertmanager-pod"]:::pod
 
             PROMTAIL["promtail-daemonset"]:::pod
-            
+
             KAFKAX_SVC["kafka-exporter-service"]:::k8sSvc
             KAFKAX_POD["kafka-exporter-pod"]:::pod
 
@@ -779,7 +825,7 @@ flowchart TB
     APIGW_PODS -->|gRPC call| TX_SVC
     APIGW_PODS -->|gRPC call| TRANSFER_SVC
     APIGW_PODS -->|gRPC call| WITHDRAW_SVC
-    
+
     AUTH_SVC --> AUTH_POD
     USER_SVC --> USER_POD
     ROLE_SVC --> ROLE_POD
@@ -1016,20 +1062,20 @@ graph TD
 
 ## Technology Stack
 
-| Category | Selected Technologies | Purpose |
-| :--- | :--- | :--- |
-| **Language** | Java 21 (Eclipse Vert.x v4.5.24) | Reactive, non-blocking asynchronous Java execution. |
-| **API Edge Gateway** | Vert.x Web Router | Reactive REST API Gateway router and reverse proxy destination. |
-| **RPC Inter-service** | Vert.x gRPC Client & Server | Blazing fast, contract-first synchronous gRPC communication. |
-| **Database** | PostgreSQL v17 | Safe ACID ledger persistent storage system. |
-| **Database Gateway** | PgBouncer | Extreme-efficiency PostgreSQL socket connection pooler. |
-| **DB Migrations** | Flyway | Incremental database schema version manager run on startup. |
-| **Caching Tier** | Redis Cluster (6 Nodes) | Resilient, distributed key-value cache layer. |
-| **Messaging Stream** | Apache Kafka | Asynchronous high-throughput messaging event bus (KRaft mode). |
-| **Token Manager** | JWT | Secure stateless request authentication standard. |
-| **Observability** | OpenTelemetry + Jaeger | Vendor-neutral distributed telemetry pipeline and visualization. |
-| **Docker Engine** | Compose | Local environment virtualization orchestration. |
-| **Orchestrator** | Kubernetes | Production-scale auto-scaling pod clustering infrastructure. |
+| Category              | Selected Technologies            | Purpose                                                          |
+| :-------------------- | :------------------------------- | :--------------------------------------------------------------- |
+| **Language**          | Java 21 (Eclipse Vert.x v4.5.24) | Reactive, non-blocking asynchronous Java execution.              |
+| **API Edge Gateway**  | Vert.x Web Router                | Reactive REST API Gateway router and reverse proxy destination.  |
+| **RPC Inter-service** | Vert.x gRPC Client & Server      | Blazing fast, contract-first synchronous gRPC communication.     |
+| **Database**          | PostgreSQL v17                   | Safe ACID ledger persistent storage system.                      |
+| **Database Gateway**  | PgBouncer                        | Extreme-efficiency PostgreSQL socket connection pooler.          |
+| **DB Migrations**     | Flyway                           | Incremental database schema version manager run on startup.      |
+| **Caching Tier**      | Redis Cluster (6 Nodes)          | Resilient, distributed key-value cache layer.                    |
+| **Messaging Stream**  | Apache Kafka                     | Asynchronous high-throughput messaging event bus (KRaft mode).   |
+| **Token Manager**     | JWT                              | Secure stateless request authentication standard.                |
+| **Observability**     | OpenTelemetry + Jaeger           | Vendor-neutral distributed telemetry pipeline and visualization. |
+| **Docker Engine**     | Compose                          | Local environment virtualization orchestration.                  |
+| **Orchestrator**      | Kubernetes                       | Production-scale auto-scaling pod clustering infrastructure.     |
 
 ---
 
@@ -1038,7 +1084,9 @@ graph TD
 The platform enforces strict DevSecOps practices using automated verification and security scanning workflows:
 
 ### GitHub Actions Pipeline
+
 The automated workflow in [.github/workflows/ci.yml](file:///.github/workflows/ci.yml) triggers on every push and pull request to the `main` or `master` branches, performing the following steps:
+
 1. **Compilation Check**: Sets up JDK 21 (Temurin) with Maven caching to build the Java code.
 2. **Docker Image Builds**: Builds the 13 microservice images via Docker Buildx (utilizing BuildKit cache mounts to optimize build times).
 3. **Trivy Filesystem & Secret Scan**: Audits dependencies for CVE vulnerabilities and scans files for exposed keys/secrets.
@@ -1048,7 +1096,9 @@ The automated workflow in [.github/workflows/ci.yml](file:///.github/workflows/c
 Any high or critical findings will automatically fail the build, preventing insecure code or credentials from merging.
 
 ### Local Security Scanning
+
 You can audit your local workspace (vulnerabilities, hardcoded secrets, and Kubernetes/Compose configurations) using our pre-configured Trivy Docker scanner script:
+
 ```bash
 ./deployments/trivy/scan.sh
 ```
@@ -1118,17 +1168,87 @@ docker-compose -f deployments/local/docker-compose.yml ps
 
 ---
 
+## End-to-End Testing (Hurl E2E Suites)
+
+With the Compose stack running, the platform ships **four** executable Hurl E2E suites. Each runner registers a throwaway user, reads the OTP verification code directly from PostgreSQL (the API deliberately never returns it), executes the `.hurl` assertions, and cleans the user up on exit.
+
+| Suite                                                      | Runner script                                             | Coverage                                                                   |
+| :--------------------------------------------------------- | :-------------------------------------------------------- | :------------------------------------------------------------------------- |
+| `deployments/local/e2e.hurl`                               | `deployments/local/run-e2e.sh`                            | Core API surface across all 12 services (auth, users, cards, saldo, topup, transfer, withdraw, transaction). |
+| `deployments/local/credit-lifecycle.hurl`                  | `deployments/local/run-credit-lifecycle.sh`               | Full credit card lifecycle: limits → authorization holds → void → billing settlement → payment → rewards.  |
+| `deployments/local/fraud-scoring.hurl`                     | `deployments/local/run-fraud-scoring.sh`                  | Real-time fraud scoring pipeline including Kafka alert verification.        |
+| `deployments/local/stats.hurl`                             | `deployments/local/run-stats.sh`                          | All analytics endpoints: saldo / card / merchant / topup / transfer / withdraw / transaction stats — global + by-card. |
+
+```bash
+# Smoke-test the whole API surface
+./deployments/local/run-e2e.sh
+
+# Credit card lifecycle end-to-end
+./deployments/local/run-credit-lifecycle.sh
+
+# Fraud scoring pipeline (blocks a high-risk card + confirms card.fraud.alert on Kafka)
+./deployments/local/run-fraud-scoring.sh
+
+# All stats/analytics endpoints (global + by-card)
+./deployments/local/run-stats.sh
+```
+
+The runners accept `BASE_URL` / `E2E_EMAIL` / `STATS_EMAIL` environment overrides (`BASE_URL` defaults to `http://localhost:5000`).
+
+### Credit Card Lifecycle E2E
+
+`run-credit-lifecycle.sh` drives **20 requests** through the complete credit lifecycle. Because the platform exposes no standalone "capture" RPC (only `Authorize` + `Reverse`), the settlement step is exercised through the **billing engine**, which captures holds into a monthly statement:
+
+| Step | Action                                                        | Verified assertion                                                               |
+| :--- | :------------------------------------------------------------ | :------------------------------------------------------------------------------- |
+| 1-2  | Health check + full auth flow (register/verify/login/me)      | `status == "success"`                                                           |
+| 3-4  | Create a **credit** card + merchant onboarding                 | `201`, capture `card_number` & `merchant_id`                                     |
+| 5    | Set credit limit `5,000,000` + read back                      | `credit_limit == "5000000"`, `available_credit == "5000000"`, `used_credit == "0"` |
+| 6    | Authorize ×2 — holds of `100,000` + `50,000`                  | `approval_status == "APPROVED"`, `used_credit == "150000"`                    |
+| 7    | Reverse (void) the second hold                                | `reversed == true`, `used_credit == "100000"`                                   |
+| 8-9  | Trigger billing settlement (capture) + fetch statement        | `statements_generated >= 1`, `purchases == "100000"`, `payment_status == "UNPAID"` |
+| 10-11| Post statement payment + payment history                      | `payment_id` present, `total >= 1`                                               |
+| 12-13| Rewards accrual + post-payment limit check                    | points accrued, `used_credit == "0"` (credit released)                          |
+
+> **Protobuf wire-format note**: `int64` fields serialize to JSON **strings**, so limit/balance amounts are asserted with `"5000000"` style string matchers, while `int32` fields (e.g. `statement_id`) are asserted as plain numbers.
+
+### Fraud Scoring E2E
+
+`run-fraud-scoring.sh` drives **10 requests** through the async fraud pipeline: authorize a low-risk transaction (MCC `5411`, score `0`) and a high-risk one (MCC `7995`, amount `15,000,000`, score `70`), then waits for the credit account to flip to `BLOCKED`. After Hurl succeeds it verifies the async side effects directly:
+
+1. **Postgres** — `risk_score == 70` persisted on the high-risk `card_auth_transactions` row.
+2. **Postgres** — the credit account status is `BLOCKED` (set only by `FraudScoringConsumerVerticle`).
+3. **Kafka** — a `card.fraud.alert` event for the card under test is consumed from the topic (best-effort check).
+
+This suite depends on the background worker verticles (`FraudScoringConsumerVerticle` / `BillingSchedulerVerticle`) — both are deployed as Vert.x worker verticles inside the `card` container.
+
+### Stats/Analytics E2E
+
+`run-stats.sh` drives **~117 requests** against the analytics surface. It seeds one card + saldo + merchant + topup + withdraw + transaction, then asserts `HTTP 200` for every stats endpoint across six families:
+
+| Family | Global | By-card |
+| :--- | :--- | :--- |
+| **Saldo** | `yearly-total-balances`, `monthly/yearly-balances` | — |
+| **Card** | `dashboard`, monthly/yearly balance, topup, withdraw, transaction, transfer sender/receiver amounts | same set via `?card_number=` query |
+| **Merchant** | transactions, monthly/yearly payment-methods, amounts, total-amounts | by `:merchantId` and by `:apiKey` |
+| **Topup** | monthly/yearly success, failed, methods, amounts | path-param `:cardNumber` variants |
+| **Transfer** | monthly/yearly success, failed, amounts | success/failed, by-sender, by-receiver |
+| **Withdraw** | monthly/yearly success, failed, amounts | success/failed, amounts |
+| **Transaction** | monthly/yearly success, failed, methods, amounts | path-param `:cardNumber` variants |
+
+---
+
 ## Port Map Registry
 
-| Application/Service | Port Configuration / URL |
-| :--- | :--- |
-| **NGINX Reverse Proxy Edge** | [http://localhost](http://localhost) |
-| **API Gateway Direct REST Hub** | [http://localhost:5000](http://localhost:5000) |
-| **Grafana Dashboard Portal** | [http://localhost:3000](http://localhost:3000) *(Credentials: `admin`/`admin`)* |
-| **Prometheus Telemetry** | [http://localhost:9090](http://localhost:9090) |
-| **Jaeger Distributed Tracing** | [http://localhost:16686](http://localhost:16686) |
-| **PgBouncer Gateway Node** | `localhost:6432` |
-| **PostgreSQL Database Engine** | `localhost:5432` |
+| Application/Service             | Port Configuration / URL                                                        |
+| :------------------------------ | :------------------------------------------------------------------------------ |
+| **NGINX Reverse Proxy Edge**    | [http://localhost](http://localhost)                                            |
+| **API Gateway Direct REST Hub** | [http://localhost:5000](http://localhost:5000)                                  |
+| **Grafana Dashboard Portal**    | [http://localhost:3000](http://localhost:3000) _(Credentials: `admin`/`admin`)_ |
+| **Prometheus Telemetry**        | [http://localhost:9090](http://localhost:9090)                                  |
+| **Jaeger Distributed Tracing**  | [http://localhost:16686](http://localhost:16686)                                |
+| **PgBouncer Gateway Node**      | `localhost:6432`                                                                |
+| **PostgreSQL Database Engine**  | `localhost:5432`                                                                |
 
 To stop the development system and clean up resources:
 
@@ -1140,14 +1260,18 @@ docker-compose -f deployments/local/docker-compose.yml down -v
 
 ## Maven & Shell Commands Reference
 
-| Command | Scope |
-| :--- | :--- |
-| `mvn clean install` | Cleans target directories, runs tests, compiles all submodules, and generates package JARs. |
-| `mvn compile` | Compiles raw Java source files for all modules. |
-| `./build-docker-images.sh` | Orchestrates the build of Docker images for all Vert.x microservices. |
-| `docker-compose -f deployments/local/docker-compose.yml up -d` | Launches all containers (DBs, Redis cluster, Kafka, observability, and Java services) in background mode. |
-| `docker-compose -f deployments/local/docker-compose.yml down` | Stops compose containers, releasing standard networks. |
-| `docker-compose -f deployments/local/docker-compose.yml logs -f <service>` | Follows the realtime stdout logs of a specific service container. |
+| Command                                                                    | Scope                                                                                                     |
+| :------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------- |
+| `mvn clean install`                                                        | Cleans target directories, runs tests, compiles all submodules, and generates package JARs.               |
+| `mvn compile`                                                              | Compiles raw Java source files for all modules.                                                           |
+| `./build-docker-images.sh`                                                 | Orchestrates the build of Docker images for all Vert.x microservices.                                     |
+| `docker-compose -f deployments/local/docker-compose.yml up -d`             | Launches all containers (DBs, Redis cluster, Kafka, observability, and Java services) in background mode. |
+| `docker-compose -f deployments/local/docker-compose.yml down`              | Stops compose containers, releasing standard networks.                                                    |
+| `docker-compose -f deployments/local/docker-compose.yml logs -f <service>` | Follows the realtime stdout logs of a specific service container.                                         |
+| `./deployments/local/run-e2e.sh`                                             | Runs the core API-surface Hurl E2E suite against the local stack.                                          |
+| `./deployments/local/run-credit-lifecycle.sh`                                | Runs the credit card lifecycle Hurl E2E suite (limits, holds, void, billing, payment, rewards).             |
+| `./deployments/local/run-fraud-scoring.sh`                                   | Runs the fraud scoring Hurl E2E suite incl. DB risk-score + Kafka alert verification.                       |
+| `./deployments/local/run-stats.sh`                                           | Runs the stats/analytics Hurl E2E suite (~117 requests: saldo/card/merchant/topup/transfer/withdraw/transaction). |
 
 ---
 

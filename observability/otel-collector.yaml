@@ -79,3 +79,13 @@ service:
       level: "info"
     metrics:
       level: detailed
+      # Expose the collector's own telemetry (otelcol_process_*, otelcol_receiver_*,
+      # otelcol_exporter_*) so the "OTel Collector" section of the infrastructure
+      # dashboard can display live pipeline health. The default :8888 endpoint was
+      # removed in collector v0.99+, so a pull reader must be declared explicitly.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: "0.0.0.0"
+                port: 8888

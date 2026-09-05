@@ -11,4 +11,3 @@ spec:
       storage: 10Gi
   storageClassName: standard
   volumeName: loki-data-pv
-  

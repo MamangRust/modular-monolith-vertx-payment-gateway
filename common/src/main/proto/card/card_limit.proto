@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package pb.card;
+
+option go_package = "github.com/MamangRust/monolith-payment-gateway-pb/card";
+
+import "card/card.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message SetLimitRequest {
+  string card_number = 1;
+  int64 credit_limit = 2;
+  int32 billing_cycle_day = 3;
+  int32 annual_rate_bps = 4;
+}
+
+message AdjustLimitRequest {
+  string card_number = 1;
+  int64 delta = 2; // positive or negative
+}
+
+message CreditLimitResult {
+  string card_number = 1;
+  int64 credit_limit = 2;
+  int64 used_credit = 3;
+  int64 available_credit = 4;
+  string status = 5;
+  int32 billing_cycle_day = 6;
+  int32 annual_rate_bps = 7;
+}
+
+message GetLimitResponse {
+  string status = 1;
+  string message = 2;
+  CreditLimitResult data = 3;
+}
+
+message SetLimitResponse {
+  string status = 1;
+  string message = 2;
+  CreditLimitResult data = 3;
+}
+
+message GetLimitByCardNumberRequest {
+  string card_number = 1;
+}
+
+service CardLimitService {
+  rpc GetLimit(GetLimitByCardNumberRequest) returns (GetLimitResponse) {}
+  rpc SetLimit(SetLimitRequest) returns (SetLimitResponse) {}
+  rpc AdjustLimit(AdjustLimitRequest) returns (GetLimitResponse) {}
+}

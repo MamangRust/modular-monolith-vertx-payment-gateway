@@ -8,6 +8,7 @@ import io.example.common.chaos.ChaosKafkaInterceptor;
 import io.example.common.chaos.ChaosManager;
 import io.example.common.chaos.ChaosSqlProxy;
 import io.example.common.config.AppConfig;
+import io.example.common.grpc.GrpcHealthService;
 import io.example.common.config.KafkaConfig;
 import io.example.common.config.RedisConfig;
 import io.example.common.config.TelemetryConfig;
@@ -66,6 +67,7 @@ public class TransactionVerticle extends AbstractVerticle {
   private static final Logger log = LoggerFactory.getLogger(TransactionVerticle.class);
 
   private TelemetryConfig telemetryConfig;
+  private GrpcHealthService grpcHealthService;
   private KafkaService kafkaService;
   private GrpcClient grpcClient;
   private ChaosManager chaosManager;
@@ -81,13 +83,13 @@ public class TransactionVerticle extends AbstractVerticle {
             .put("user", "DRAGON")
             .put("password", "DRAGON")
             .put("pool_size", 5))
-        .put("grpc_port", 8090)
-        .put("card_service_host", "localhost")
-        .put("card_service_port", 8082)
-        .put("merchant_service_host", "localhost")
-        .put("merchant_service_port", 8083)
-        .put("saldo_service_host", "localhost")
-        .put("saldo_service_port", 8084)
+        .put("grpc_port", 50058)
+        .put("card_service_host", "card")
+        .put("card_service_port", 50053)
+        .put("merchant_service_host", "merchant")
+        .put("merchant_service_port", 50054)
+        .put("saldo_service_host", "saldo")
+        .put("saldo_service_port", 50056)
         .put("service.name", "transaction-service");
 
     DeploymentOptions options = new DeploymentOptions().setConfig(config);
@@ -124,7 +126,10 @@ public class TransactionVerticle extends AbstractVerticle {
         .setPort(dbCfg.getInteger("port", 5432))
         .setDatabase(dbCfg.getString("database", "vertxdb"))
         .setUser(dbCfg.getString("user", "vertx"))
-        .setPassword(dbCfg.getString("password", "vertx"));
+        .setPassword(dbCfg.getString("password", "vertx"))
+        // PgBouncer transaction pooling drops unnamed prepared statements between
+        // transactions; caching keeps statements valid per server connection.
+        .setCachePreparedStatements(true);
 
     PoolOptions poolOptions = new PoolOptions()
         .setMaxSize(dbCfg.getInteger("pool_size", 5));
@@ -145,20 +150,32 @@ public class TransactionVerticle extends AbstractVerticle {
     // 3. gRPC Clients Initialize
     this.grpcClient = GrpcClient.client(vertx);
 
-    String cardHost = rawConfig.getString("card_service_host", "localhost");
-    int cardPort = rawConfig.getInteger("card_service_port", 8082);
+    String cardHost = System.getenv().getOrDefault("CARD_SERVICE_HOST",
+        rawConfig.getString("card_service_host", "card"));
+    int cardPort = Integer.parseInt(
+        System.getenv().getOrDefault("CARD_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_CARD_PORT",
+                String.valueOf(rawConfig.getInteger("card_service_port", 50053)))));
     var cardStub = new VertxCardQueryServiceGrpcClient(grpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(cardPort, cardHost));
     var cardClientRepo = new CardClientRepository(cardStub);
 
-    String merchantHost = rawConfig.getString("merchant_service_host", "localhost");
-    int merchantPort = rawConfig.getInteger("merchant_service_port", 8083);
+    String merchantHost = System.getenv().getOrDefault("MERCHANT_SERVICE_HOST",
+        rawConfig.getString("merchant_service_host", "merchant"));
+    int merchantPort = Integer.parseInt(
+        System.getenv().getOrDefault("MERCHANT_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_MERCHANT_PORT",
+                String.valueOf(rawConfig.getInteger("merchant_service_port", 50054)))));
     var merchantStub = new VertxMerchantQueryServiceGrpcClient(grpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(merchantPort, merchantHost));
     var merchantClientRepo = new MerchantClientRepository(merchantStub);
 
-    String saldoHost = rawConfig.getString("saldo_service_host", "localhost");
-    int saldoPort = rawConfig.getInteger("saldo_service_port", 8084);
+    String saldoHost = System.getenv().getOrDefault("SALDO_SERVICE_HOST",
+        rawConfig.getString("saldo_service_host", "saldo"));
+    int saldoPort = Integer.parseInt(
+        System.getenv().getOrDefault("SALDO_SERVICE_PORT",
+            System.getenv().getOrDefault("GRPC_SALDO_PORT",
+                String.valueOf(rawConfig.getInteger("saldo_service_port", 50056)))));
     var saldoQueryStub = new VertxSaldoQueryServiceGrpcClient(grpcClient,
         io.vertx.core.net.SocketAddress.inetSocketAddress(saldoPort, saldoHost));
     var saldoCmdStub = new VertxSaldoCommandServiceGrpcClient(grpcClient,
@@ -200,6 +217,7 @@ public class TransactionVerticle extends AbstractVerticle {
           log.info(
               "TransactionVerticle fully initialized with Decoupled CQRS and gRPC Clients. Listening for gRPC on port {}",
               port);
+          grpcHealthService.setServing(true);
           startPromise.complete();
         })
         .onFailure(err -> {
@@ -210,6 +228,9 @@ public class TransactionVerticle extends AbstractVerticle {
 
   @Override
   public void stop(Promise<Void> stopPromise) {
+    if (grpcHealthService != null) {
+      grpcHealthService.setServing(false);
+    }
     if (telemetryConfig != null) {
       telemetryConfig.shutdown();
     }
@@ -241,6 +262,7 @@ public class TransactionVerticle extends AbstractVerticle {
     Handler<HttpServerRequest> chaosHandler =
         new ChaosGrpcServerInterceptor(grpcServer, chaosManager, vertx);
 
+    grpcHealthService = new GrpcHealthService("transaction").bind(grpcServer);
     return vertx.createHttpServer()
         .requestHandler(chaosHandler)
         .listen(grpcPort)

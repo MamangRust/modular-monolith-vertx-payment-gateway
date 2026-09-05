@@ -8,7 +8,7 @@ spec:
     spec:
       containers:
         - name: migrate
-          image: monolith-payment-gateway-grpc-vertx/db-migration:latest
+          image: ghcr.io/__GHCR_OWNER__/vertx-payment-gateway/db-migration:latest
           workingDir: /app
           envFrom:
             - configMapRef:

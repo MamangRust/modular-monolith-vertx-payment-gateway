@@ -20,29 +20,43 @@ public class TransactionCommandRepositoryImpl implements TransactionCommandRepos
   @Override
   public Future<Transaction> createTransaction(CreateTransactionRequest req) {
     String sql = """
-        INSERT INTO transactions (card_number, amount, payment_method, merchant_id, transaction_time, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        INSERT INTO transactions (card_number, amount, payment_method, merchant_id, idempotency_key, transaction_time, status, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT (idempotency_key)
+        WHERE idempotency_key IS NOT NULL AND deleted_at IS NULL DO NOTHING
         RETURNING *
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(
         req.getCardNumber(),
         req.getAmount(),
         req.getPaymentMethod(),
-        (int) req.getMerchantId()))
+        (int) req.getMerchantId(),
+        req.getIdempotencyKey() != null && !req.getIdempotencyKey().isBlank() ? req.getIdempotencyKey() : null))
         .map(this::mapSingle);
+  }
+
+  @Override
+  public Future<Transaction> findByIdempotencyKey(String idempotencyKey) {
+    String sql = "SELECT * FROM transactions WHERE idempotency_key = $1 AND deleted_at IS NULL LIMIT 1";
+    return pool.preparedQuery(sql).execute(Tuple.of(idempotencyKey)).map(this::mapSingle);
   }
 
   @Override
   public Future<Transaction> updateTransaction(UpdateTransactionRequest req) {
     String sql = """
-        UPDATE transactions SET card_number = $2, amount = $3, payment_method = $4, merchant_id = $5, updated_at = CURRENT_TIMESTAMP
+        UPDATE transactions
+        SET card_number = COALESCE(NULLIF($2, ''), card_number),
+            amount = COALESCE(NULLIF($3, 0), amount),
+            payment_method = COALESCE(NULLIF($4, ''), payment_method),
+            merchant_id = COALESCE(NULLIF($5, 0), merchant_id),
+            updated_at = CURRENT_TIMESTAMP
         WHERE transaction_id = $1 AND deleted_at IS NULL RETURNING *
         """;
     return pool.preparedQuery(sql).execute(Tuple.of(
         req.getTransactionId(),
-        req.getCardNumber(),
+        req.getCardNumber() != null ? req.getCardNumber() : "",
         req.getAmount(),
-        req.getPaymentMethod(),
+        req.getPaymentMethod() != null ? req.getPaymentMethod() : "",
         (int) req.getMerchantId()))
         .map(this::mapSingle);
   }

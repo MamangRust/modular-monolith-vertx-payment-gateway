@@ -2,8 +2,10 @@ package io.example.card.model;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.NoSuchElementException;
 
 import io.vertx.core.json.JsonObject;
 import io.vertx.sqlclient.Row;
@@ -76,14 +78,14 @@ public class Card {
     if (row == null)
       return null;
 
-    Integer id = row.getInteger("id");
-    if (id == null) {
-      id = row.getInteger("card_id");
-    }
+    // cards PK is "card_id" (V5 migration); repositories alias it as "id".
+    // row.getInteger throws NoSuchElementException when a column is absent, not null,
+    // so each lookup needs its own guard.
+    Integer id = readId(row);
     Integer userId = row.getInteger("user_id");
     String cardNumber = row.getString("card_number");
     String cardType = row.getString("card_type");
-    String expireDate = row.getString("expire_date");
+    String expireDate = readExpireDate(row);
     String cvv = row.getString("cvv");
     String cardProvider = row.getString("card_provider");
 
@@ -117,6 +119,40 @@ public class Card {
         .updatedAt(updatedAt)
         .deletedAt(deletedAt)
         .build();
+  }
+
+  /**
+   * cards.expire_date is a DATE column (see V5 migration), so the pg driver decodes it
+   * to {@link LocalDate}. Calling row.getString() on it throws ClassCastException.
+   * The model keeps expireDate as an ISO-8601 String, so decode as LocalDate first and
+   * fall back to getString() for queries that already cast the column to text.
+   */
+  static Integer readId(Row row) {
+    try {
+      Integer id = row.getInteger("id");
+      if (id != null) {
+        return id;
+      }
+    } catch (NoSuchElementException ignored) {
+      // query did not alias card_id AS id
+    }
+    try {
+      return row.getInteger("card_id");
+    } catch (NoSuchElementException ignored) {
+      return null;
+    }
+  }
+
+  static String readExpireDate(Row row) {
+    try {
+      LocalDate date = row.getLocalDate("expire_date");
+      if (date != null) {
+        return date.toString();
+      }
+    } catch (ClassCastException ignored) {
+      // column already text/varchar, fall through to getString below
+    }
+    return row.getString("expire_date");
   }
 
   private static Timestamp parseTimestamp(JsonObject json, String field) {

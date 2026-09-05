@@ -22,6 +22,7 @@ public class WithdrawCommandHandler
     var domainReq = io.example.withdraw.domain.requests.CreateWithdrawRequest.builder()
         .cardNumber(req.getCardNumber())
         .withdrawAmount(req.getWithdrawAmount())
+        .idempotencyKey(req.getIdempotencyKey())
         .build();
     return service.createWithdraw(domainReq)
         .map(this::toSuccessResponse)

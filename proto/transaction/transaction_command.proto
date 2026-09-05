@@ -15,6 +15,7 @@ message CreateTransactionRequest {
   string payment_method = 4;
   int32 merchant_id = 5;
   google.protobuf.Timestamp transaction_time = 6;
+  string idempotency_key = 7;
 }
 
 message UpdateTransactionRequest {
